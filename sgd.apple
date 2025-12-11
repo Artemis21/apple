@@ -1,0 +1,45 @@
+D = 10
+N = 1000
+P1 = 100
+P2 = 3
+epochs = 5
+learn_rate = 0.0001
+
+weight1: [f32; P1 x D] = random.normal(1, 1)
+bias1: [f32; P1] = random.normal(0, 1)
+
+weight2: [f32; P2 x P1] = random.normal(1, 1)
+bias2: [f32; P2] = random.normal(0, 1)
+
+fn feedforward(x: [f32; N]) -> [f32; P2] {
+    z1 = relu(weight1 @ x + bias1)
+    relu(weight2 @ z1 + bias2)
+}
+
+fn loss(x: [f32; D], y: [f32; P2]) -> f32 {
+    mean(pow(2, feedfoward(x) - y))
+}
+
+fn relu(v: f32) -> f32 {
+    if v < 0.0 {
+        0.0
+    } else {
+        v
+    }
+}
+
+x_train: [f32; N x D] = load()
+y_train: [f32; N] = load()
+
+for _ in 0..epochs {
+    for x, y in zip(x_train, y_train) {
+        l = loss(x, y)
+        weight1 -= (l % weight1) * learn_rate
+        bias1 -= (l % bias1) * learn_rate
+        weight2 -= (l % weight2) * learn_rate
+        bias2 -= (l % bias2) * learn_rate
+    }
+}
+
+e_train = sum(loss(x_train, y_train))
+print(e_train)

@@ -1,0 +1,42 @@
+(block
+
+(let D () nat 10)
+(let N () nat 1000)
+(let P1 () nat 100)
+(let P2 () nat 3)
+(let epochs () nat 5)
+(let learn_rate () real 0.0001)
+
+(let weight1 () (arr real P1 D) (normal 1 1))
+(let bias1 () (arr real P1) (normal 0 1))
+(let weight2 () (arr real P2 P1) (normal 1 1))
+(let bias2 () (arr real P2) (normal 0 1))
+
+(let feedforward ((x (arr real D))) (arr real P2) (block
+    (let z1 () _ (relu (+ (@ weight1 x) bias1)))
+    (relu (+ (@ weight2 z1) bias2))
+))
+
+(let loss ((x (arr real D)) (y (arr real P2))) real
+    (mean (pow 2 (- (feedforward x) y)))
+)
+
+(let relu ((v real)) real
+    (if (< v 0.0) 0.0 v)
+)
+
+(let (x_train y_train) () (, (arr real N D) (arr real N)) load)
+
+(for _ (.. 0 epochs)
+    (for (x y) (, x_train y_train) (block
+        (let l () _ (loss x y))
+        (-= weight1 (* (% l weight1) learn_rate))
+        (-= bias1 (* (% l bias1) learn_rate))
+        (-= weight2 (* (% l weight2) learn_rate))
+        (-= bias2 (* (% l bias2) learn_rate))
+    ))
+)
+
+(let e_train () _ (sum (loss x_train y_train)))
+(print e_train)
+)
