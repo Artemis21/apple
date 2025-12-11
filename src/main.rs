@@ -36,7 +36,7 @@ pub enum FunctionImpl {
 }
 
 fn main() {
-    let src = include_str!("../sgd.ast");
+    let src = include_str!("../samples/sgd.ast");
     if let Err(e) = read_eval_print(src) {
         e.display(src);
     }
