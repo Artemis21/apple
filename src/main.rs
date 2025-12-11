@@ -54,13 +54,13 @@ fn eval_expr((expr, span): &(SExpr, Span), env: &mut Environment) -> Result<Valu
     match expr {
         SExpr::Real(real) => Ok(Scalar::Real(*real).into_value()),
         SExpr::Natural(nat) => Ok(Scalar::Natural(*nat).into_value()),
-        SExpr::Symbol(sym) => eval_call((sym, span.clone()), span.clone(), &[], env),
+        SExpr::Symbol(sym) => eval_call((sym, *span), *span, &[], env),
         SExpr::List(exprs) => {
             if let Some(((SExpr::Symbol(fn_name), fn_name_span), args)) = exprs.split_first() {
-                eval_call((fn_name, fn_name_span.clone()), span.clone(), args, env)
+                eval_call((fn_name, *fn_name_span), *span, args, env)
             } else {
                 Err(error!(
-                    span,
+                    *span,
                     "call expression must start with function name"
                 ))
             }
@@ -79,7 +79,7 @@ fn eval_call(
     } else {
         let args = arg_exprs
             .iter()
-            .map(|expr| Ok((eval_expr(expr, env)?, expr.1.clone())))
+            .map(|expr| Ok((eval_expr(expr, env)?, expr.1)))
             .collect::<Result<_, _>>()?;
         eval_defn(env.get(fn_name, fn_name_span)?, call_span, args)
     }

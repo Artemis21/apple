@@ -31,7 +31,7 @@ impl Environment {
                     ));
                 }
                 for (subtarget, subvalue) in targets.into_iter().zip(vals) {
-                    self.assign_let(subtarget, subvalue, span.clone())?;
+                    self.assign_let(subtarget, subvalue, span)?;
                 }
             }
         }

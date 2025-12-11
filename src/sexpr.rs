@@ -1,10 +1,10 @@
 use std::{
     fmt::{Display, Write},
     num::{ParseFloatError, ParseIntError},
+    ops::Range,
 };
 
 use crate::{Error, error};
-pub use logos::Span;
 use logos::{Logos, SpannedIter};
 
 pub fn read(src: &str) -> Result<(SExpr, Span), Error> {
@@ -13,6 +13,25 @@ pub fn read(src: &str) -> Result<(SExpr, Span), Error> {
     match parse_sexprs_to(&mut lexer, &mut out)? {
         End::RParen(span) => Err(error!(span, "unexpected rparen")),
         End::Eof => Ok(out.remove(0)),
+    }
+}
+
+/// Custom type mainly because we want it to implement Copy.
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
+    start: usize,
+    end: usize,
+}
+
+impl From<Range<usize>> for Span {
+    fn from(Range { start, end }: Range<usize>) -> Self {
+        Self { start, end }
+    }
+}
+
+impl From<Span> for Range<usize> {
+    fn from(Span { start, end }: Span) -> Self {
+        start..end
     }
 }
 
@@ -27,9 +46,10 @@ fn parse_sexprs_to(
     out: &mut Vec<(SExpr, Span)>,
 ) -> Result<End, Error> {
     while let Some((tok, span)) = lex.next() {
+        let mut span = Span::from(span);
         let tok = tok.map_err(|lex_e| Error {
             reason: lex_e.0,
-            span: span.clone(),
+            span,
         })?;
         match tok {
             Token::LParen => {
@@ -37,7 +57,8 @@ fn parse_sexprs_to(
                 let End::RParen(end_span) = parse_sexprs_to(lex, &mut els)? else {
                     return Err(error!(span, "unmatched lparen (reached EOF)"));
                 };
-                out.push((SExpr::List(els), (span.start)..(end_span.end)));
+                span.end = end_span.end;
+                out.push((SExpr::List(els), span));
             }
             Token::RParen => {
                 return Ok(End::RParen(span));

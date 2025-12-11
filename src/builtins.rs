@@ -111,22 +111,22 @@ impl Display for Builtin {
 
 fn get_real((val, span): &(Value, Span)) -> Result<Real, Error> {
     let Value::Array(arr) = val else {
-        return Err(error!(span, "expected scalar real, got tuple"));
+        return Err(error!(*span, "expected scalar real, got tuple"));
     };
     match arr.as_scalar() {
         Some(Scalar::Real(real)) => Ok(real),
         Some(Scalar::Natural(nat)) => Ok(nat as f32),
-        _ => Err(error!(span, "expected scalar real, got {arr}")),
+        _ => Err(error!(*span, "expected scalar real, got {arr}")),
     }
 }
 
 fn get_nat((val, span): &(Value, Span)) -> Result<Natural, Error> {
     let Value::Array(arr) = val else {
-        return Err(error!(span, "expected scalar nat, got tuple"));
+        return Err(error!(*span, "expected scalar nat, got tuple"));
     };
     if let Some(Scalar::Natural(nat)) = arr.as_scalar() {
         Ok(nat)
     } else {
-        Err(error!(span, "expected scalar nat, got {arr}"))
+        Err(error!(*span, "expected scalar nat, got {arr}"))
     }
 }

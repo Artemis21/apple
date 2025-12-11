@@ -63,8 +63,8 @@ impl Keyword {
                 }
                 let target = parse_target(&args[0])?;
                 let parent = eval_expr(&args[1], env)?;
-                for child in iter_value(parent, args[1].1.clone())? {
-                    env.assign_let(target.clone(), child, span.clone())?;
+                for child in iter_value(parent, args[1].1)? {
+                    env.assign_let(target.clone(), child, span)?;
                     eval_expr(&args[2], env)?;
                 }
                 Ok(Value::unit())
@@ -103,12 +103,9 @@ impl Keyword {
                     return Err(error!(span, "-= takes 2 args: (-= name value)"));
                 }
                 let (name, name_span) = parse_symbol(&args[0])?;
-                let lhs = eval_call((&name, name_span.clone()), name_span.clone(), &[], env)?;
+                let lhs = eval_call((&name, name_span), name_span, &[], env)?;
                 let rhs = eval_expr(&args[1], env)?;
-                let result = Builtin::Sub.call(
-                    vec![(lhs, name_span), (rhs, args[1].1.clone())],
-                    span.clone(),
-                )?;
+                let result = Builtin::Sub.call(vec![(lhs, name_span), (rhs, args[1].1)], span)?;
                 env.assign_let(Target::Symbol(name), result, span)?;
                 Ok(Value::unit())
             }
@@ -130,7 +127,7 @@ fn iter_value(parent: Value, span: Span) -> Result<Vec<Value>, Error> {
             }
             let iters: Vec<Vec<Value>> = vals
                 .into_iter()
-                .map(|v| iter_value(v, span.clone()))
+                .map(|v| iter_value(v, span))
                 .collect::<Result<_, _>>()?;
             let len = iters[0].len();
             if iters.iter().any(|iter| iter.len() != len) {
@@ -149,7 +146,7 @@ fn iter_value(parent: Value, span: Span) -> Result<Vec<Value>, Error> {
 
 fn parse_param_list((expr, span): &(SExpr, Span)) -> Result<Vec<Target>, Error> {
     let SExpr::List(params) = expr else {
-        return Err(error!(span, "param list must be a list"));
+        return Err(error!(*span, "param list must be a list"));
     };
     params
         .iter()
@@ -160,7 +157,7 @@ fn parse_param_list((expr, span): &(SExpr, Span)) -> Result<Vec<Target>, Error> 
                 parse_target(&param_args[0])
             } else {
                 Err(error!(
-                    param_span,
+                    *param_span,
                     "param must be of the form (target type)"
                 ))
             }
@@ -175,15 +172,15 @@ fn parse_target((expr, span): &(SExpr, Span)) -> Result<Target, Error> {
         SExpr::List(exprs) => {
             Target::Unpack(exprs.iter().map(parse_target).collect::<Result<_, _>>()?)
         }
-        _ => return Err(error!(span, "bad target (must be symbol or list)")),
+        _ => return Err(error!(*span, "bad target (must be symbol or list)")),
     };
     Ok(target)
 }
 
 fn parse_symbol((expr, span): &(SExpr, Span)) -> Result<(Symbol, Span), Error> {
     if let SExpr::Symbol(sym) = expr {
-        Ok((sym.to_string(), span.clone()))
+        Ok((sym.to_string(), *span))
     } else {
-        Err(error!(span, "expected symbol"))
+        Err(error!(*span, "expected symbol"))
     }
 }
