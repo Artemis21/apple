@@ -4,20 +4,20 @@ use std::{
     ops::Range,
 };
 
-use crate::{Error, error};
+use crate::{Error, Keyword, error};
 use logos::{Logos, SpannedIter};
 
 pub fn read(src: &str) -> Result<(SExpr, Span), Error> {
     let mut lexer = Token::lexer(src).spanned();
     let mut out = vec![];
     match parse_sexprs_to(&mut lexer, &mut out)? {
-        End::RParen(span) => Err(error!(span, "unexpected rparen")),
+        End::RParen(span) => Err(error!("unexpected rparen").with_span(span)),
         End::Eof => Ok(out.remove(0)),
     }
 }
 
 /// Custom type mainly because we want it to implement Copy.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Span {
     start: usize,
     end: usize,
@@ -47,15 +47,12 @@ fn parse_sexprs_to(
 ) -> Result<End, Error> {
     while let Some((tok, span)) = lex.next() {
         let mut span = Span::from(span);
-        let tok = tok.map_err(|lex_e| Error {
-            reason: lex_e.0,
-            span,
-        })?;
+        let tok = tok.map_err(|lex_e| error!("lex error: {}", lex_e.0).with_span(span))?;
         match tok {
             Token::LParen => {
                 let mut els = vec![];
                 let End::RParen(end_span) = parse_sexprs_to(lex, &mut els)? else {
-                    return Err(error!(span, "unmatched lparen (reached EOF)"));
+                    return Err(error!("unmatched lparen (reached EOF)").with_span(span));
                 };
                 span.end = end_span.end;
                 out.push((SExpr::List(els), span));
@@ -63,7 +60,10 @@ fn parse_sexprs_to(
             Token::RParen => {
                 return Ok(End::RParen(span));
             }
-            Token::Symbol(sym) => out.push((SExpr::Symbol(sym), span)),
+            Token::Symbol(sym) => out.push((
+                Keyword::from_symbol(&sym).map_or(SExpr::Symbol(sym), SExpr::Keyword),
+                span,
+            )),
             Token::Natural(nat) => out.push((SExpr::Natural(nat), span)),
             Token::Real(real) => out.push((SExpr::Real(real), span)),
         }
@@ -75,6 +75,7 @@ fn parse_sexprs_to(
 pub enum SExpr {
     List(Vec<(SExpr, Span)>),
     Symbol(String),
+    Keyword(Keyword),
     Natural(u32),
     Real(f32),
 }
@@ -93,6 +94,7 @@ impl Display for SExpr {
                 Ok(())
             }
             Self::Symbol(s) => s.fmt(f),
+            Self::Keyword(kw) => kw.fmt(f),
             Self::Natural(n) => n.fmt(f),
             Self::Real(r) => r.fmt(f),
         }

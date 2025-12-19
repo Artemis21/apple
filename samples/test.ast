@@ -1,13 +1,13 @@
 (block
 
-(fn foo ((x _) (y _)) _ (+ (* 2 x) y))
+(fn foo ((x _) (y _)) _ (+ (* 2.0 x) y))
 
-(let (x y) _ (, 1000.0 1))
+(let (x y) _ (, 1000.0 1.0))
 
-(print (, (.. 1 10) (< y 2) ,))
+(print (, (.. 1 10) (< y 2.0) (,)))
 
 (for (i j) (, (.. 1 100000) (.. 2 100001)) (block
-    (if (< i 10) (print (foo i j)) 0)
+    (if (< (to_real i) 10.0) (print (foo (to_real i) (to_real j))) (,))
     (-= x 0.001)
 ))
 

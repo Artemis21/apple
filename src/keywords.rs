@@ -1,7 +1,9 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+use std::fmt::Display;
+
 use crate::{
-    Builtin, Environment, Error, Function, FunctionImpl, SExpr, Scalar, Span, Symbol, SymbolRef,
-    Target, Value, error, eval_call, eval_expr,
+    Environment, Error, Expr, SExpr, Span, Symbol, SymbolRef, TExpr, Target, Type, TypeContext,
+    error, type_expr,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -13,6 +15,21 @@ pub enum Keyword {
     Block,
     Tuple,
     SubEq,
+}
+
+impl Display for Keyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Let => "let",
+            Self::Fn => "fn",
+            Self::For => "for",
+            Self::If => "if",
+            Self::Block => "block",
+            Self::Tuple => ",",
+            Self::SubEq => "-=",
+        };
+        f.write_str(name)
+    }
 }
 
 impl Keyword {
@@ -29,116 +46,119 @@ impl Keyword {
         }
     }
 
-    pub fn call(
+    pub fn typeck(
         self,
-        args: &[(SExpr, Span)],
         span: Span,
+        args: &[(SExpr, Span)],
         env: &mut Environment,
-    ) -> Result<Value, Error> {
+        ctx: &mut TypeContext,
+    ) -> Result<TExpr, Error> {
         match self {
             Self::Let => {
                 if args.len() != 3 {
-                    return Err(error!(span, "let takes 3 args: (let target type value)"));
+                    return Err(error!("let takes 3 args: (let target type value)").with_span(span));
                 }
                 let target = parse_target(&args[0])?;
-                let value = eval_expr(&args[2], env)?;
-                env.assign_let(target, value, span)?;
-                Ok(Value::unit())
+                let value = type_expr(&args[2], env, ctx)?;
+                env.assign(target.clone(), value.type_, ctx)?;
+                Ok(TExpr {
+                    type_: ctx.const_type(Type::unit()),
+                    expr: Box::new(Expr::Define(target, value)),
+                    span,
+                })
             }
             Self::Fn => {
                 if args.len() != 4 {
-                    return Err(error!(span, "fn takes 4 args: (fn name params type value)"));
+                    return Err(
+                        error!("fn takes 4 args: (fn name params type value)").with_span(span)
+                    );
                 }
                 let (name, _) = parse_symbol(&args[0])?;
-                let func = Function {
-                    params: parse_param_list(&args[1])?,
-                    implementation: FunctionImpl::User(args[3].clone(), env.clone()),
+                let params = parse_param_list(&args[1])?;
+                let mut func_env = env.clone();
+                let param_tys = params
+                    .iter()
+                    .map(|target| {
+                        let ty = ctx.fresh();
+                        func_env.assign(target.clone(), ty, ctx)?;
+                        Ok(ty)
+                    })
+                    .collect::<Result<_, _>>()?;
+                let body = type_expr(&args[3], &mut func_env, ctx)?;
+                let func_ty = ctx.const_type(Type::Function(param_tys, body.type_));
+                env.assign_symbol(name.clone(), func_ty);
+                let lambda = TExpr {
+                    type_: func_ty,
+                    expr: Box::new(Expr::Lambda(params, body)),
+                    span,
                 };
-                env.assign_fn(name, func);
-                Ok(Value::unit())
+                Ok(TExpr {
+                    type_: ctx.const_type(Type::unit()),
+                    expr: Box::new(Expr::Define(Target::Symbol(name), lambda)),
+                    span,
+                })
             }
             Self::For => {
                 if args.len() != 3 {
-                    return Err(error!(span, "for takes 3 args: (let target iter body)"));
+                    return Err(error!("for takes 3 args: (for target iter body)").with_span(span));
                 }
                 let target = parse_target(&args[0])?;
-                let parent = eval_expr(&args[1], env)?;
-                for child in iter_value(parent, args[1].1)? {
-                    env.assign_let(target.clone(), child, span)?;
-                    eval_expr(&args[2], env)?;
-                }
-                Ok(Value::unit())
+                let iter = type_expr(&args[1], env, ctx)?;
+                let mut loop_env = env.clone();
+                loop_env.assign(target.clone(), iter.type_, ctx)?;
+                let body = type_expr(&args[2], &mut loop_env, ctx)?;
+                Ok(TExpr {
+                    type_: ctx.const_type(Type::unit()),
+                    expr: Box::new(Expr::For(target, iter, body)),
+                    span,
+                })
             }
             Self::If => {
                 if args.len() != 3 {
-                    return Err(error!(span, "if takes 3 args: (if cond then else)"));
+                    return Err(error!("if takes 3 args: (if cond then else)").with_span(span));
                 }
-                let cond = eval_expr(&args[0], env)?;
-                if let Value::Array(arr) = cond
-                    && let Some(Scalar::Bool(b)) = arr.as_scalar()
-                {
-                    let expr_idx = if b { 1 } else { 2 };
-                    eval_expr(&args[expr_idx], env)
-                } else {
-                    Err(error!(args[0].1, "if condition must be a single boolean"))
-                }
+                let cond = type_expr(&args[0], env, ctx)?;
+                ctx.unify_with_concrete(cond.type_, Type::Bool)?;
+                let then = type_expr(&args[1], env, ctx)?;
+                let else_ = type_expr(&args[2], env, ctx)?;
+                ctx.unify(then.type_, else_.type_)?;
+                Ok(TExpr {
+                    type_: then.type_,
+                    expr: Box::new(Expr::If(cond, then, else_)),
+                    span,
+                })
             }
             Self::Block => {
-                if args.is_empty() {
-                    Ok(Value::unit())
-                } else {
-                    for expr in &args[..args.len() - 1] {
-                        eval_expr(expr, env)?;
-                    }
-                    eval_expr(args.last().unwrap(), env)
-                }
+                // TODO: scoping. clone env?
+                let lines = args
+                    .into_iter()
+                    .map(|arg| type_expr(arg, env, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(TExpr {
+                    type_: lines
+                        .last()
+                        .map_or_else(|| ctx.const_type(Type::unit()), |line| line.type_),
+                    expr: Box::new(Expr::Block(lines)),
+                    span,
+                })
             }
-            Self::Tuple => Ok(Value::Tuple(
-                args.iter()
-                    .map(|e| eval_expr(e, env))
-                    .collect::<Result<_, _>>()?,
-            )),
+            Self::Tuple => {
+                let components = args
+                    .into_iter()
+                    .map(|arg| type_expr(arg, env, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(TExpr {
+                    type_: ctx
+                        .const_type(Type::Tuple(components.iter().map(|c| c.type_).collect())),
+                    expr: Box::new(Expr::Tuple(components)),
+                    span,
+                })
+            }
             Self::SubEq => {
                 if args.len() != 2 {
-                    return Err(error!(span, "-= takes 2 args: (-= name value)"));
+                    return Err(error!("-= takes 2 args: (-= name value)").with_span(span));
                 }
-                let (name, name_span) = parse_symbol(&args[0])?;
-                let lhs = eval_call((&name, name_span), name_span, &[], env)?;
-                let rhs = eval_expr(&args[1], env)?;
-                let result = Builtin::Sub.call(vec![(lhs, name_span), (rhs, args[1].1)], span)?;
-                env.assign_let(Target::Symbol(name), result, span)?;
-                Ok(Value::unit())
-            }
-        }
-    }
-}
-
-fn iter_value(parent: Value, span: Span) -> Result<Vec<Value>, Error> {
-    match parent {
-        Value::Array(arr) => Ok(arr
-            .as_view()
-            .children()
-            .ok_or_else(|| error!(span, "cannot iterate over a scalar"))?
-            .map(|child| Value::Array(child.to_owned()))
-            .collect()),
-        Value::Tuple(vals) => {
-            if vals.is_empty() {
-                return Err(error!(span, "cannot iterate over unit"));
-            }
-            let iters: Vec<Vec<Value>> = vals
-                .into_iter()
-                .map(|v| iter_value(v, span))
-                .collect::<Result<_, _>>()?;
-            let len = iters[0].len();
-            if iters.iter().any(|iter| iter.len() != len) {
-                Err(error!(
-                    span,
-                    "cannot iterate over tuple with different length elements"
-                ))
-            } else {
-                Ok((0..len)
-                    .map(|i| Value::Tuple(iters.iter().map(|iter| iter[i].clone()).collect()))
-                    .collect())
+                todo!()
             }
         }
     }
@@ -146,20 +166,17 @@ fn iter_value(parent: Value, span: Span) -> Result<Vec<Value>, Error> {
 
 fn parse_param_list((expr, span): &(SExpr, Span)) -> Result<Vec<Target>, Error> {
     let SExpr::List(params) = expr else {
-        return Err(error!(*span, "param list must be a list"));
+        return Err(error!("param list must be a list").with_span(*span));
     };
     params
         .iter()
-        .map(|(param_expr, param_span)| {
+        .map(|(param_expr, _param_span)| {
             if let SExpr::List(param_args) = param_expr
                 && param_args.len() == 2
             {
                 parse_target(&param_args[0])
             } else {
-                Err(error!(
-                    *param_span,
-                    "param must be of the form (target type)"
-                ))
+                Err(error!("param must be of the form (target type)").with_span(*span))
             }
         })
         .collect()
@@ -172,7 +189,7 @@ fn parse_target((expr, span): &(SExpr, Span)) -> Result<Target, Error> {
         SExpr::List(exprs) => {
             Target::Unpack(exprs.iter().map(parse_target).collect::<Result<_, _>>()?)
         }
-        _ => return Err(error!(*span, "bad target (must be symbol or list)")),
+        _ => return Err(error!("bad target (must be symbol or list)").with_span(*span)),
     };
     Ok(target)
 }
@@ -181,6 +198,6 @@ fn parse_symbol((expr, span): &(SExpr, Span)) -> Result<(Symbol, Span), Error> {
     if let SExpr::Symbol(sym) = expr {
         Ok((sym.to_string(), *span))
     } else {
-        Err(error!(*span, "expected symbol"))
+        Err(error!("expected symbol").with_span(*span))
     }
 }
