@@ -1,3 +1,9 @@
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{Display, Write},
+    iter::zip,
+};
+
 use crate::{Error, error};
 
 #[derive(Debug, Clone)]
@@ -11,14 +17,21 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn unit() -> Self {
+    pub const fn unit() -> Self {
         Self::Tuple(vec![])
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeRef(usize);
 
+#[derive(Debug, Clone)]
+pub struct PolyType {
+    quantified: HashSet<TypeRef>,
+    term: TypeRef,
+}
+
+#[derive(Clone)]
 enum TypeVar {
     Free,
     Bound(Type),
@@ -35,7 +48,7 @@ pub struct TypeContext {
 }
 
 impl TypeContext {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { variables: vec![] }
     }
 
@@ -49,6 +62,76 @@ impl TypeContext {
         let idx = self.variables.len();
         self.variables.push(TypeVar::Bound(t));
         TypeRef(idx)
+    }
+
+    pub const fn display(&self, type_: TypeRef) -> DisplayTypeRef<'_> {
+        DisplayTypeRef { type_, ctx: self }
+    }
+
+    pub const fn display_concrete<'a>(&'a self, type_: &'a Type) -> DisplayType<'a> {
+        DisplayType { type_, ctx: self }
+    }
+
+    pub fn generalise<'a>(
+        &self,
+        term: TypeRef,
+        bound_types: impl Iterator<Item = &'a PolyType>,
+    ) -> PolyType {
+        let bound_vars = bound_types
+            .flat_map(|polytype| FreeVariablesIter {
+                ctx: self,
+                bound: polytype.quantified.clone(),
+                terms: vec![polytype.term],
+            })
+            .collect();
+        let free_vars = FreeVariablesIter {
+            ctx: self,
+            bound: bound_vars,
+            terms: vec![term],
+        };
+        PolyType {
+            quantified: free_vars.into_iter().collect(),
+            term,
+        }
+    }
+
+    pub fn specialise(&mut self, pt: &PolyType) -> TypeRef {
+        let fresh = pt.quantified.iter().map(|qt| (*qt, self.fresh())).collect();
+        self.instantiate_mapped(pt.term, &fresh)
+    }
+
+    fn instantiate_mapped(
+        &mut self,
+        type_: TypeRef,
+        mapping: &HashMap<TypeRef, TypeRef>,
+    ) -> TypeRef {
+        if let Some(replacement) = mapping.get(&type_) {
+            *replacement
+        } else {
+            match self.variables[type_.0].clone() {
+                TypeVar::Substituted(var) => self.instantiate_mapped(var, mapping),
+                TypeVar::Bound(Type::Function(params, ret)) => {
+                    let params = params
+                        .iter()
+                        .map(|p| self.instantiate_mapped(*p, mapping))
+                        .collect();
+                    let ret = self.instantiate_mapped(ret, mapping);
+                    self.const_type(Type::Function(params, ret))
+                }
+                TypeVar::Bound(Type::Tuple(components)) => {
+                    let components = components
+                        .iter()
+                        .map(|c| self.instantiate_mapped(*c, mapping))
+                        .collect();
+                    self.const_type(Type::Tuple(components))
+                }
+                TypeVar::Bound(Type::Array(element)) => {
+                    let element = self.instantiate_mapped(element, mapping);
+                    self.const_type(Type::Array(element))
+                }
+                TypeVar::Free | TypeVar::Bound(Type::Bool | Type::Natural | Type::Real) => type_,
+            }
+        }
     }
 
     pub fn unify(&mut self, t1: TypeRef, t2: TypeRef) -> Result<(), Error> {
@@ -68,14 +151,28 @@ impl TypeContext {
     fn unify_concrete(&mut self, t1: Type, t2: Type) -> Result<(), Error> {
         match (t1, t2) {
             (Type::Function(params1, ret1), Type::Function(params2, ret2)) => {
-                for (t1, t2) in params1.iter().zip(params2.iter()) {
-                    self.unify(*t1, *t2)?;
+                if params1.len() != params2.len() {
+                    Err(error!(
+                        "couldn't match function types, different number of parameters ({} != {})",
+                        params1.len(),
+                        params2.len()
+                    ))?;
+                }
+                for (t1, t2) in zip(params1, params2) {
+                    self.unify(t1, t2)?;
                 }
                 self.unify(ret1, ret2)
             }
             (Type::Tuple(components1), Type::Tuple(components2)) => {
-                for (t1, t2) in components1.iter().zip(components2.iter()) {
-                    self.unify(*t1, *t2)?;
+                if components1.len() != components2.len() {
+                    Err(error!(
+                        "couldn't match tuple types, different number of components ({} != {})",
+                        components1.len(),
+                        components2.len()
+                    ))?;
+                }
+                for (t1, t2) in zip(components1, components2) {
+                    self.unify(t1, t2)?;
                 }
                 Ok(())
             }
@@ -83,7 +180,11 @@ impl TypeContext {
             (Type::Bool, Type::Bool)
             | (Type::Natural, Type::Natural)
             | (Type::Real, Type::Real) => Ok(()),
-            (t1, t2) => Err(error!("couldn't match type {t1:?} with {t2:?}")),
+            (t1, t2) => Err(error!(
+                "couldn't match type {} with {}",
+                self.display_concrete(&t1),
+                self.display_concrete(&t2)
+            )),
         }
     }
 
@@ -95,7 +196,9 @@ impl TypeContext {
                 Ok(())
             }
             ResolvedType::Bound(type_) if self.occurs_in_concrete(free_var, &type_) => Err(error!(
-                "infinite type caused by unifying {free_var:?} and {type_:?}"
+                "infinite type caused by unifying {} and {}",
+                self.display(free_var),
+                self.display_concrete(&type_),
             )),
             ResolvedType::Bound(type_) => {
                 self.variables[free_var.0] = TypeVar::Bound(type_);
@@ -128,6 +231,88 @@ impl TypeContext {
             TypeVar::Free => ResolvedType::Free(t_ref),
             TypeVar::Bound(t) => ResolvedType::Bound(t.clone()),
             TypeVar::Substituted(r) => self.resolve(*r),
+        }
+    }
+}
+
+struct FreeVariablesIter<'a> {
+    ctx: &'a TypeContext,
+    bound: HashSet<TypeRef>,
+    terms: Vec<TypeRef>,
+}
+
+impl Iterator for FreeVariablesIter<'_> {
+    type Item = TypeRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let term = self.terms.pop()?;
+        if self.bound.contains(&term) {
+            return None;
+        }
+        match &self.ctx.variables[term.0] {
+            TypeVar::Free => return Some(term),
+            TypeVar::Bound(Type::Function(params, ret)) => {
+                self.terms.extend(params);
+                self.terms.push(*ret);
+            }
+            TypeVar::Bound(Type::Tuple(components)) => self.terms.extend(components),
+            TypeVar::Bound(Type::Bool | Type::Natural | Type::Real) => {}
+            TypeVar::Substituted(next_t) | TypeVar::Bound(Type::Array(next_t)) => {
+                self.terms.push(*next_t);
+            }
+        }
+        self.next()
+    }
+}
+
+pub struct DisplayTypeRef<'a> {
+    type_: TypeRef,
+    ctx: &'a TypeContext,
+}
+
+impl Display for DisplayTypeRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ctx.resolve(self.type_) {
+            ResolvedType::Free(var) => write!(f, "t{}", var.0),
+            ResolvedType::Bound(concrete) => self.ctx.display_concrete(&concrete).fmt(f),
+        }
+    }
+}
+
+pub struct DisplayType<'a> {
+    type_: &'a Type,
+    ctx: &'a TypeContext,
+}
+
+impl Display for DisplayType<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.type_ {
+            Type::Function(params, ret) => {
+                f.write_char('(')?;
+                if let Some((first, rest)) = params.split_first() {
+                    self.ctx.display(*first).fmt(f)?;
+                    for param in rest {
+                        write!(f, ", {}", self.ctx.display(*param))?;
+                    }
+                }
+                write!(f, ") -> {}", self.ctx.display(*ret))
+            }
+            Type::Tuple(components) => {
+                f.write_char('(')?;
+                if let Some((first, rest)) = components.split_first() {
+                    self.ctx.display(*first).fmt(f)?;
+                    for component in rest {
+                        write!(f, ", {}", self.ctx.display(*component))?;
+                    }
+                }
+                f.write_char(')')
+            }
+            Type::Array(element) => {
+                write!(f, "[{}]", self.ctx.display(*element))
+            }
+            Type::Bool => f.write_str("bool"),
+            Type::Natural => f.write_str("nat"),
+            Type::Real => f.write_str("real"),
         }
     }
 }

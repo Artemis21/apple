@@ -9,11 +9,11 @@ mod types;
 
 use builtins::initial_env;
 use environment::Environment;
-use errors::{Error, error};
+use errors::{Error, ErrorCause, ResultExt, cause, error};
 use keywords::Keyword;
 use sexpr::{SExpr, Span};
 use typed_ast::{Expr, TExpr, Target};
-use types::{Type, TypeContext, TypeRef};
+use types::{PolyType, Type, TypeContext, TypeRef};
 
 type Symbol = String;
 type SymbolRef = str;
@@ -29,8 +29,9 @@ fn read_eval_print(src: &str) -> Result<(), Error> {
     let expr = sexpr::read(src)?;
     let mut ctx = TypeContext::new();
     let mut env = initial_env(&mut ctx);
-    let result = type_expr(&expr, &mut env, &mut ctx)?;
-    println!("result: {result:?}");
+    let texpr = type_expr(&expr, &mut env, &mut ctx)?;
+    env.debug_dump(&mut ctx);
+    texpr.debug_show_types(src, &mut ctx);
     Ok(())
 }
 
@@ -51,8 +52,8 @@ fn type_expr(
             span,
         }),
         SExpr::Symbol(sym) => Ok(TExpr {
-            type_: env.get(sym, span)?.clone(), // TODO: specialisation
-            expr: Box::new(Expr::Reference(sym.to_string())),
+            type_: env.get(sym, span, ctx)?,
+            expr: Box::new(Expr::Reference(sym.clone())),
             span,
         }),
         SExpr::Keyword(kw) => Err(error!("keyword {kw} found out of context").with_span(span)),
@@ -61,15 +62,16 @@ fn type_expr(
             Some((func_e, arg_es)) => {
                 let func = type_expr(func_e, env, ctx)?;
                 let args = arg_es
-                    .into_iter()
+                    .iter()
                     .map(|arg_e| type_expr(arg_e, env, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                let arg_tys = args.iter().map(|arg| arg.type_.clone()).collect();
+                let arg_tys = args.iter().map(|arg| arg.type_).collect();
                 let result_ty = ctx.fresh();
-                ctx.unify_with_concrete(
-                    func.type_,
-                    Type::Function(arg_tys, result_ty.clone()).into(),
-                )?;
+                ctx.unify_with_concrete(func.type_, Type::Function(arg_tys, result_ty))
+                    .error_cause(cause!(
+                        Some(span),
+                        "function arguments must match parameters"
+                    ))?;
                 Ok(TExpr {
                     type_: result_ty,
                     expr: Box::new(Expr::Call(func, args)),

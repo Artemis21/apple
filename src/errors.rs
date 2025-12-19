@@ -39,7 +39,7 @@ impl Error {
         report.finish().eprint(Source::from(src)).unwrap();
     }
 
-    pub fn with_span(mut self, span: Span) -> Self {
+    pub const fn with_span(mut self, span: Span) -> Self {
         self.span = Some(span);
         self
     }
@@ -50,7 +50,7 @@ impl Error {
     }
 }
 
-trait ResultExt {
+pub trait ResultExt {
     fn error_span(self, span: Span) -> Self;
     fn error_cause(self, cause: ErrorCause) -> Self;
 }
@@ -67,7 +67,7 @@ impl<T> ResultExt for Result<T, Error> {
 
 macro_rules! error {
     ($($t:tt)*) => {
-        Error {
+        crate::Error {
             span: None,
             message: format!($($t)*),
             causes: vec![],
@@ -76,13 +76,13 @@ macro_rules! error {
 }
 
 macro_rules! cause {
-    ($span:expr, $(t:tt)*) => {
-        Error {
-            span,
+    ($span:expr, $($t:tt)*) => {
+        crate::ErrorCause {
+            span: $span,
             message: format!($($t)*)
         }
     };
 }
 
-pub(crate) use error;
 pub(crate) use cause;
+pub(crate) use error;

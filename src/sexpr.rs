@@ -73,7 +73,7 @@ fn parse_sexprs_to(
 
 #[derive(Clone, Debug)]
 pub enum SExpr {
-    List(Vec<(SExpr, Span)>),
+    List(Vec<(Self, Span)>),
     Symbol(String),
     Keyword(Keyword),
     Natural(u32),
