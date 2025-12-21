@@ -4,7 +4,7 @@ use std::{
     iter::zip,
 };
 
-use crate::{Error, error};
+use crate::{Environment, Error, error};
 
 #[derive(Debug, Clone)]
 pub enum Type {
@@ -29,6 +29,15 @@ pub struct TypeRef(usize);
 pub struct PolyType {
     quantified: HashSet<TypeRef>,
     term: TypeRef,
+}
+
+impl PolyType {
+    pub fn unquantified(term: TypeRef) -> Self {
+        Self {
+            quantified: HashSet::new(),
+            term,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -72,21 +81,25 @@ impl TypeContext {
         DisplayType { type_, ctx: self }
     }
 
-    pub fn generalise<'a>(
-        &self,
-        term: TypeRef,
-        bound_types: impl Iterator<Item = &'a PolyType>,
-    ) -> PolyType {
-        let bound_vars = bound_types
+    pub fn get(&self, tr: TypeRef) -> Result<Type, Error> {
+        match self.resolve(tr) {
+            ResolvedType::Free(_) => Err(error!("could not determine type")),
+            ResolvedType::Bound(ty) => Ok(ty),
+        }
+    }
+
+    pub fn generalise<'a>(&self, term: TypeRef, env: &Environment) -> PolyType {
+        let bound_vars = env
+            .all_types()
             .flat_map(|polytype| FreeVariablesIter {
                 ctx: self,
-                bound: polytype.quantified.clone(),
+                exclude: polytype.quantified.clone(),
                 terms: vec![polytype.term],
             })
             .collect();
         let free_vars = FreeVariablesIter {
             ctx: self,
-            bound: bound_vars,
+            exclude: bound_vars,
             terms: vec![term],
         };
         PolyType {
@@ -237,7 +250,7 @@ impl TypeContext {
 
 struct FreeVariablesIter<'a> {
     ctx: &'a TypeContext,
-    bound: HashSet<TypeRef>,
+    exclude: HashSet<TypeRef>,
     terms: Vec<TypeRef>,
 }
 
@@ -246,9 +259,10 @@ impl Iterator for FreeVariablesIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let term = self.terms.pop()?;
-        if self.bound.contains(&term) {
+        if self.exclude.contains(&term) {
             return None;
         }
+        self.exclude.insert(term); // don't re-visit
         match &self.ctx.variables[term.0] {
             TypeVar::Free => return Some(term),
             TypeVar::Bound(Type::Function(params, ret)) => {

@@ -1,6 +1,6 @@
 use ariadne::{Label, Report, ReportKind, Source};
 
-use crate::{Span, TypeRef, types::TypeContext};
+use crate::{DefnId, Span, TypeContext, TypeRef};
 
 #[derive(Debug)]
 pub struct TExpr {
@@ -13,12 +13,23 @@ pub struct TExpr {
 #[allow(dead_code)] // TODO: actually evaluate/compile
 pub enum Expr {
     Call(TExpr, Vec<TExpr>),
-    Reference(Symbol),
+    Reference(DefnId),
     Define(Target, TExpr),
-    Assign(Symbol, TExpr),
-    Lambda(Vec<Target>, TExpr),
-    For(Target, TExpr, TExpr),
-    If(TExpr, TExpr, TExpr),
+    Lambda {
+        params: Vec<Target>,
+        captures: Vec<DefnId>,
+        body: TExpr,
+    },
+    For {
+        target: Target,
+        iter: TExpr,
+        body: TExpr,
+    },
+    If {
+        cond: TExpr,
+        then: TExpr,
+        else_: TExpr,
+    },
     Block(Vec<TExpr>),
     Tuple(Vec<TExpr>),
     LiteralReal(f32),
@@ -26,15 +37,14 @@ pub enum Expr {
 }
 
 #[derive(Debug, Clone)]
-pub enum Target {
+pub enum Target<Sym = DefnId> {
     Ignore,
-    Symbol(Symbol),
+    Symbol(Sym),
     Unpack(Vec<Self>, Span),
 }
 
-type Symbol = String;
-
 impl TExpr {
+    #[allow(dead_code)]
     pub fn debug_show_types(&self, src: &str, ctx: &mut TypeContext) {
         let mut labels = vec![];
         self.debug_get_labels(&mut labels, ctx);
@@ -45,6 +55,7 @@ impl TExpr {
             .unwrap();
     }
 
+    #[allow(dead_code)]
     fn debug_get_labels(&self, labels: &mut Vec<Label>, ctx: &mut TypeContext) {
         labels.push(
             Label::new(self.span.into()).with_message(format!("{}", ctx.display(self.type_))),
@@ -57,14 +68,14 @@ impl TExpr {
                 }
             }
             Expr::Reference(_) | Expr::LiteralReal(_) | Expr::LiteralNatural(_) => {}
-            Expr::Define(_, val) | Expr::Assign(_, val) | Expr::Lambda(_, val) => {
+            Expr::Define(_, val) | Expr::Lambda { body: val, .. } => {
                 val.debug_get_labels(labels, ctx);
             }
-            Expr::For(_, iter, body) => {
+            Expr::For { iter, body, .. } => {
                 iter.debug_get_labels(labels, ctx);
                 body.debug_get_labels(labels, ctx);
             }
-            Expr::If(cond, then, else_) => {
+            Expr::If { cond, then, else_ } => {
                 cond.debug_get_labels(labels, ctx);
                 then.debug_get_labels(labels, ctx);
                 else_.debug_get_labels(labels, ctx);

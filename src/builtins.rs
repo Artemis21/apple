@@ -1,56 +1,79 @@
-use crate::{Environment, Type, TypeContext};
+use crate::{Environment, Type, TypeContext, environment::DefnId, types::TypeRef};
 
-macro_rules! initial_env {
-    { for< $( $quantified:ident ),* > $( $name:tt: $( $t:tt )->+ ,)* } => {
-        pub fn initial_env(ctx: &mut TypeContext) -> Environment {
-            $( let $quantified = ctx.fresh(); )*
-            let mut env = Environment::default();
-            $(
-                env.assign_symbol(
-                    stringify!($name).to_string(),
-                    type_ref!([ctx] $( $t )->+ ),
-                    ctx,
-                );
-            )*
-            env
+pub fn initial_env(ctx: &mut TypeContext) -> (Environment, Vec<(Builtin, DefnId)>) {
+    let mut env = Environment::default();
+    let defns = BUILTINS
+        .iter()
+        .map(|b| {
+            let monoty = b.type_(ctx);
+            let polyty = ctx.generalise(monoty, &env);
+            (*b, env.define_symbol(b.name().to_string(), polyty))
+        })
+        .collect();
+    (env, defns)
+}
+
+const BUILTINS: [Builtin; 11] = [
+    Builtin::Normal,
+    Builtin::Range,
+    Builtin::Sum,
+    Builtin::Load,
+    Builtin::Print,
+    Builtin::ToReal,
+    Builtin::Matmul,
+    Builtin::Add,
+    Builtin::Sub,
+    Builtin::Mul,
+    Builtin::Lt,
+];
+
+#[derive(Clone, Copy, Debug)]
+pub enum Builtin {
+    Normal,
+    Range,
+    Sum,
+    Load,
+    Print,
+    ToReal,
+    Matmul,
+    Add,
+    Sub,
+    Mul,
+    Lt,
+}
+
+impl Builtin {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Range => "..",
+            Self::Sum => "sum",
+            Self::Load => "load",
+            Self::Print => "print",
+            Self::ToReal => "to_real",
+            Self::Matmul => "@",
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Lt => "<",
         }
-    };
-}
-
-macro_rules! type_ref {
-    ( [$ctx:ident] ( $( $( $param_t:tt )->+ ),* ) -> $( $ret_t:tt )->+ ) => {{
-        let params = vec![ $( type_ref!( [$ctx] $( $param_t )->+ ) ),* ];
-        let ret = type_ref!( [$ctx] $( $ret_t )->+ );
-        $ctx.const_type(Type::Function(params, ret))
-    }};
-    ( [$ctx:ident] ( $( $( $t:tt )->+ ),* ) ) => {{
-        let components = vec![ $( type_ref!( [$ctx] $( $t )->+ ) ),* ];
-        $ctx.const_type(Type::Tuple(components))
-    }};
-    ( [$ctx:ident] [ $( $t:tt )->+ ] ) => {{
-        let element = type_ref!( [$ctx] $( $t )->+ );
-        $ctx.const_type(Type::Array(element))
-    }};
-    ( [$ctx:ident] $name:ident ) => {
-        $ctx.const_type(Type::$name)
-    };
-    ( [$ctx:ident] { $name:ident } ) => {
-        $name
     }
-}
 
-// TODO: typeclass polymorphism
-initial_env! {
-    for <t0>
-    normal: (Real, Real) -> Real,
-    ..: (Natural, Natural) -> [Natural],
-    sum: ([Real]) -> Real,
-    load: () -> [Real],
-    print: ({t0}) -> (),
-    to_real: (Natural) -> Real,
-    @: ([Real], [Real]) -> Real,
-    +: (Real, Real) -> Real,
-    -: (Real, Real) -> Real,
-    *: (Real, Real) -> Real,
-    <: (Real, Real) -> Bool,
+    pub fn type_(&self, ctx: &mut TypeContext) -> TypeRef {
+        let real = ctx.const_type(Type::Real);
+        let real_arr = ctx.const_type(Type::Array(real));
+        let nat = ctx.const_type(Type::Natural);
+        let (params, ret) = match self {
+            Self::Normal | Self::Add | Self::Sub => (vec![real, real], real),
+            Self::Mul => (vec![nat, nat], nat),  // TODO: overloading
+            Self::Range => (vec![nat, nat], nat),
+            Self::Sum => (vec![real_arr], real),
+            Self::Load => (vec![], real_arr),
+            Self::Print => (vec![ctx.fresh()], ctx.const_type(Type::unit())),
+            Self::ToReal => (vec![nat], real),
+            Self::Matmul => (vec![real_arr, real_arr], real),
+            Self::Lt => (vec![real, real], ctx.const_type(Type::Bool)),
+        };
+        ctx.const_type(Type::Function(params, ret))
+    }
 }

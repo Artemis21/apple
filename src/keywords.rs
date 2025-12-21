@@ -3,13 +3,12 @@ use std::fmt::Display;
 
 use crate::{
     Environment, Error, Expr, ResultExt, SExpr, Span, Symbol, SymbolRef, TExpr, Target, Type,
-    TypeContext, error, errors::cause, type_expr,
+    TypeContext, cause, error, type_expr,
 };
 
 #[derive(Clone, Copy, Debug)]
 pub enum Keyword {
     Let,
-    Assign,
     Fn,
     For,
     If,
@@ -20,8 +19,7 @@ pub enum Keyword {
 impl Display for Keyword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
-            Self::Let => ":=",
-            Self::Assign => "=",
+            Self::Let => "let",
             Self::Fn => "fn",
             Self::For => "for",
             Self::If => "if",
@@ -35,8 +33,7 @@ impl Display for Keyword {
 impl Keyword {
     pub fn from_symbol(sym: &SymbolRef) -> Option<Self> {
         match sym {
-            ":=" => Some(Self::Let),
-            "=" => Some(Self::Assign),
+            "let" => Some(Self::Let),
             "fn" => Some(Self::Fn),
             "for" => Some(Self::For),
             "if" => Some(Self::If),
@@ -55,7 +52,6 @@ impl Keyword {
     ) -> Result<TExpr, Error> {
         match self {
             Self::Let => typeck_let(span, args, env, ctx),
-            Self::Assign => typeck_assign(span, args, env, ctx),
             Self::Fn => typeck_fn(span, args, env, ctx),
             Self::For => typeck_for(span, args, env, ctx),
             Self::If => typeck_if(span, args, env, ctx),
@@ -72,35 +68,14 @@ fn typeck_let(
     ctx: &mut TypeContext,
 ) -> Result<TExpr, Error> {
     if args.len() != 3 {
-        return Err(error!(":= takes 3 args: (:= target type value)").with_span(span));
+        return Err(error!("let takes 3 args: (let target type value)").with_span(span));
     }
-    let target = parse_target(&args[0])?;
+    let sym_target = parse_target(&args[0])?;
     let value = type_expr(&args[2], env, ctx)?;
-    env.assign(target.clone(), value.type_, ctx)?;
+    let target = env.unpack_generalise_define(sym_target, value.type_, ctx)?;
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
         expr: Box::new(Expr::Define(target, value)),
-        span,
-    })
-}
-
-fn typeck_assign(
-    span: Span,
-    args: &[(SExpr, Span)],
-    env: &mut Environment,
-    ctx: &mut TypeContext,
-) -> Result<TExpr, Error> {
-    if args.len() != 2 {
-        return Err(error!("= takes 2 args: (= name value)").with_span(span));
-    }
-    let (name, name_span) = parse_symbol(&args[0])?;
-    let lhs_type = env.get(&name, name_span, ctx)?;
-    let value = type_expr(&args[1], env, ctx)?;
-    ctx.unify(lhs_type, value.type_)
-        .error_cause(cause!(Some(span), "assignment must not change type"))?;
-    Ok(TExpr {
-        type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::Assign(name, value)),
         span,
     })
 }
@@ -115,27 +90,28 @@ fn typeck_fn(
         return Err(error!("fn takes 4 args: (fn name params type value)").with_span(span));
     }
     let (name, _) = parse_symbol(&args[0])?;
-    let params = parse_param_list(&args[1])?;
-    let mut func_env = env.clone();
-    let param_tys = params
+    let sym_params = parse_param_list(&args[1])?;
+    env.push();
+    let (params, param_tys) = sym_params
         .iter()
-        .map(|target| {
-            let ty = ctx.fresh();
-            func_env.assign(target.clone(), ty, ctx)?;
-            Ok(ty)
-        })
-        .collect::<Result<_, _>>()?;
-    let body = type_expr(&args[3], &mut func_env, ctx)?;
+        .map(|target| env.fresh_unpack_define(target.clone(), ctx))
+        .unzip();
+    let body = type_expr(&args[3], env, ctx)?;
+    let captures = env.pop();
     let func_ty = ctx.const_type(Type::Function(param_tys, body.type_));
-    env.assign_symbol(name.clone(), func_ty, ctx);
+    let fn_id = env.define_symbol(name.clone(), ctx.generalise(func_ty, env));
     let lambda = TExpr {
         type_: func_ty,
-        expr: Box::new(Expr::Lambda(params, body)),
+        expr: Box::new(Expr::Lambda {
+            params,
+            captures,
+            body,
+        }),
         span,
     };
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::Define(Target::Symbol(name), lambda)),
+        expr: Box::new(Expr::Define(Target::Symbol(fn_id), lambda)),
         span,
     })
 }
@@ -149,14 +125,16 @@ fn typeck_for(
     if args.len() != 3 {
         return Err(error!("for takes 3 args: (for target iter body)").with_span(span));
     }
-    let target = parse_target(&args[0])?;
+    let sym_target = parse_target(&args[0])?;
     let iter = type_expr(&args[1], env, ctx)?;
-    let mut loop_env = env.clone();
-    loop_env.assign(target.clone(), iter.type_, ctx)?;
-    let body = type_expr(&args[2], &mut loop_env, ctx)?;
+    // TODO: iteration over non-arrays? scoping?
+    let (target, element) = env.fresh_unpack_define(sym_target, ctx);
+    ctx.unify_with_concrete(iter.type_, Type::Array(element))
+        .error_cause(cause!(Some(span), "iteration must be over an array"))?;
+    let body = type_expr(&args[2], env, ctx)?;
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::For(target, iter, body)),
+        expr: Box::new(Expr::For { target, iter, body }),
         span,
     })
 }
@@ -179,7 +157,7 @@ fn typeck_if(
         .error_cause(cause!(Some(span), "if branches must be of the same type"))?;
     Ok(TExpr {
         type_: then.type_,
-        expr: Box::new(Expr::If(cond, then, else_)),
+        expr: Box::new(Expr::If { cond, then, else_ }),
         span,
     })
 }
@@ -221,7 +199,7 @@ fn typeck_tuple(
     })
 }
 
-fn parse_param_list((expr, span): &(SExpr, Span)) -> Result<Vec<Target>, Error> {
+fn parse_param_list((expr, span): &(SExpr, Span)) -> Result<Vec<Target<Symbol>>, Error> {
     let SExpr::List(params) = expr else {
         return Err(error!("param list must be a list").with_span(*span));
     };
@@ -239,7 +217,7 @@ fn parse_param_list((expr, span): &(SExpr, Span)) -> Result<Vec<Target>, Error> 
         .collect()
 }
 
-fn parse_target((expr, span): &(SExpr, Span)) -> Result<Target, Error> {
+fn parse_target((expr, span): &(SExpr, Span)) -> Result<Target<Symbol>, Error> {
     let target = match expr {
         SExpr::Symbol(sym) if sym == "_" => Target::Ignore,
         SExpr::Symbol(sym) => Target::Symbol(sym.clone()),

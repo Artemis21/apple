@@ -1,5 +1,6 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 mod builtins;
+mod codegen;
 mod environment;
 mod errors;
 mod keywords;
@@ -7,8 +8,11 @@ mod sexpr;
 mod typed_ast;
 mod types;
 
+use std::{env, fs::read_to_string, path::{Path, PathBuf}};
+
 use builtins::initial_env;
-use environment::Environment;
+use codegen::compile;
+use environment::{DefnId, Environment};
 use errors::{Error, ErrorCause, ResultExt, cause, error};
 use keywords::Keyword;
 use sexpr::{SExpr, Span};
@@ -19,19 +23,23 @@ type Symbol = String;
 type SymbolRef = str;
 
 fn main() {
-    let src = include_str!("../samples/test.ast");
-    if let Err(e) = read_eval_print(src) {
-        e.display(src);
+    let src_file = PathBuf::from(env::args().nth(1).unwrap());
+    let src = read_to_string(src_file).unwrap();
+    if let Err(e) = parse_compile(&src, &PathBuf::from("out")) {
+        e.display(&src);
     }
 }
 
-fn read_eval_print(src: &str) -> Result<(), Error> {
-    let expr = sexpr::read(src)?;
+fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
+    let expr = sexpr::read(&src)?;
     let mut ctx = TypeContext::new();
-    let mut env = initial_env(&mut ctx);
+    let (mut env, builtins) = initial_env(&mut ctx);
     let texpr = type_expr(&expr, &mut env, &mut ctx)?;
-    env.debug_dump(&mut ctx);
-    texpr.debug_show_types(src, &mut ctx);
+    /*env.debug_dump(&mut ctx);
+    texpr.debug_show_types(&src, &mut ctx);
+    println!("{:?}", env);
+    println!("{:#?}", texpr);*/
+    compile(texpr, builtins, &mut ctx, dest)?;
     Ok(())
 }
 
@@ -51,11 +59,12 @@ fn type_expr(
             expr: Box::new(Expr::LiteralNatural(*nat)),
             span,
         }),
-        SExpr::Symbol(sym) => Ok(TExpr {
-            type_: env.get(sym, span, ctx)?,
-            expr: Box::new(Expr::Reference(sym.clone())),
-            span,
-        }),
+        SExpr::Symbol(sym) => {
+            let (defn_id, general_ty) = env.get(sym, span)?;
+            let type_ = ctx.specialise(&general_ty);
+            let expr = Box::new(Expr::Reference(defn_id));
+            Ok(TExpr { type_, expr, span })
+        }
         SExpr::Keyword(kw) => Err(error!("keyword {kw} found out of context").with_span(span)),
         SExpr::List(exprs) => match exprs.split_first() {
             Some(((SExpr::Keyword(kw), _kw_span), args)) => kw.typeck(span, args, env, ctx),
