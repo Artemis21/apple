@@ -43,7 +43,7 @@ pub enum Builtin {
 }
 
 impl Builtin {
-    pub fn name(&self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Normal => "normal",
             Self::Range => "..",
@@ -59,17 +59,17 @@ impl Builtin {
         }
     }
 
-    pub fn type_(&self, ctx: &mut TypeContext) -> TypeRef {
+    pub fn type_(self, ctx: &mut TypeContext) -> TypeRef {
         let real = ctx.const_type(Type::Real);
         let real_arr = ctx.const_type(Type::Array(real));
         let nat = ctx.const_type(Type::Natural);
         let (params, ret) = match self {
             Self::Normal | Self::Add | Self::Sub => (vec![real, real], real),
-            Self::Mul => (vec![nat, nat], nat),  // TODO: overloading
-            Self::Range => (vec![nat, nat], nat),
+            Self::Mul => (vec![nat, nat], nat), // TODO: overloading
+            Self::Range => (vec![nat, nat], ctx.const_type(Type::Array(nat))),
             Self::Sum => (vec![real_arr], real),
             Self::Load => (vec![], real_arr),
-            Self::Print => (vec![ctx.fresh()], ctx.const_type(Type::unit())),
+            Self::Print => (vec![real], ctx.const_type(Type::unit())),
             Self::ToReal => (vec![nat], real),
             Self::Matmul => (vec![real_arr, real_arr], real),
             Self::Lt => (vec![real, real], ctx.const_type(Type::Bool)),

@@ -8,9 +8,13 @@ mod sexpr;
 mod typed_ast;
 mod types;
 
-use std::{env, fs::read_to_string, path::{Path, PathBuf}};
+use std::{
+    env,
+    fs::read_to_string,
+    path::{Path, PathBuf},
+};
 
-use builtins::initial_env;
+use builtins::{Builtin, initial_env};
 use codegen::compile;
 use environment::{DefnId, Environment};
 use errors::{Error, ErrorCause, ResultExt, cause, error};
@@ -31,7 +35,7 @@ fn main() {
 }
 
 fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
-    let expr = sexpr::read(&src)?;
+    let expr = sexpr::read(src)?;
     let mut ctx = TypeContext::new();
     let (mut env, builtins) = initial_env(&mut ctx);
     let texpr = type_expr(&expr, &mut env, &mut ctx)?;

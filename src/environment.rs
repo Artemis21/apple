@@ -4,7 +4,7 @@ use crate::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    iter::zip,
+    iter::{once, zip},
 };
 
 #[derive(Debug, Default)]
@@ -14,7 +14,7 @@ pub struct Environment {
     symbols: Vec<Symbol>,
 }
 
-/// An index into Environment::symbols, uniquely identifying a definition (even
+/// An index into `Environment::symbols`, uniquely identifying a definition (even
 /// in the presence of shadowing).
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct DefnId(usize);
@@ -27,7 +27,7 @@ pub struct Frame {
 
 impl Environment {
     pub fn push(&mut self) {
-        self.lower_frames.push(std::mem::take(&mut self.top_frame))
+        self.lower_frames.push(std::mem::take(&mut self.top_frame));
     }
 
     pub fn pop(&mut self) -> Vec<DefnId> {
@@ -118,7 +118,9 @@ impl Environment {
     }
 
     pub fn all_types(&self) -> impl Iterator<Item = &PolyType> {
-        self.frames().flat_map(|frame| frame.locals.values()).map(|(_, ty)| ty)
+        self.frames()
+            .flat_map(|frame| frame.locals.values())
+            .map(|(_, ty)| ty)
     }
 
     #[allow(dead_code)]
@@ -132,14 +134,10 @@ impl Environment {
     }
 
     fn frames(&self) -> impl Iterator<Item = &Frame> {
-        Some(&self.top_frame)
-            .into_iter()
-            .chain(self.lower_frames.iter())
+        once(&self.top_frame).chain(self.lower_frames.iter())
     }
 
     fn mut_frames(&mut self) -> impl Iterator<Item = &mut Frame> {
-        Some(&mut self.top_frame)
-            .into_iter()
-            .chain(self.lower_frames.iter_mut())
+        once(&mut self.top_frame).chain(self.lower_frames.iter_mut())
     }
 }

@@ -10,7 +10,6 @@ pub struct TExpr {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // TODO: actually evaluate/compile
 pub enum Expr {
     Call(TExpr, Vec<TExpr>),
     Reference(DefnId),
@@ -22,6 +21,7 @@ pub enum Expr {
     },
     For {
         target: Target,
+        elem_ty: TypeRef,
         iter: TExpr,
         body: TExpr,
     },

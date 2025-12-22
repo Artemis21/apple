@@ -99,7 +99,7 @@ fn typeck_fn(
     let body = type_expr(&args[3], env, ctx)?;
     let captures = env.pop();
     let func_ty = ctx.const_type(Type::Function(param_tys, body.type_));
-    let fn_id = env.define_symbol(name.clone(), ctx.generalise(func_ty, env));
+    let fn_id = env.define_symbol(name, ctx.generalise(func_ty, env));
     let lambda = TExpr {
         type_: func_ty,
         expr: Box::new(Expr::Lambda {
@@ -128,13 +128,18 @@ fn typeck_for(
     let sym_target = parse_target(&args[0])?;
     let iter = type_expr(&args[1], env, ctx)?;
     // TODO: iteration over non-arrays? scoping?
-    let (target, element) = env.fresh_unpack_define(sym_target, ctx);
-    ctx.unify_with_concrete(iter.type_, Type::Array(element))
+    let (target, elem_ty) = env.fresh_unpack_define(sym_target, ctx);
+    ctx.unify_with_concrete(iter.type_, Type::Array(elem_ty))
         .error_cause(cause!(Some(span), "iteration must be over an array"))?;
     let body = type_expr(&args[2], env, ctx)?;
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::For { target, iter, body }),
+        expr: Box::new(Expr::For {
+            target,
+            elem_ty,
+            iter,
+            body,
+        }),
         span,
     })
 }
