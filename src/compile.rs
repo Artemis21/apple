@@ -32,7 +32,7 @@ where
     llvm: &'ctx Context,
     builder: &'obj Builder<'ctx>,
     module: &'obj Module<'ctx>,
-    named_vals: &'obj mut HashMap<DefnId, BasicValueEnum<'ctx>>,
+    named_vals: &'obj mut Vec<HashMap<DefnId, BasicValueEnum<'ctx>>>,
 }
 
 pub fn compile(
@@ -45,7 +45,7 @@ pub fn compile(
     let llvm = Context::create();
     let module = llvm.create_module("main");
     let builder = llvm.create_builder();
-    let mut named_vals = HashMap::new();
+    let mut named_vals = Vec::new();
     let mut ctx = CompileCtx {
         types,
         definitions,
@@ -54,14 +54,15 @@ pub fn compile(
         module: &module,
         named_vals: &mut named_vals,
     };
-    compile_builtins(builtins, &mut ctx);
-    ctx.compile_module(expr)?;
+    ctx.compile_module(expr, builtins)?;
     link(ctx.module, dest);
     Ok(())
 }
 
 impl<'ctx> CompileCtx<'ctx, '_> {
-    fn compile_module(&mut self, expr: TExpr) -> Result<(), Error> {
+    fn compile_module(&mut self, expr: TExpr, builtins: &[(Builtin, DefnId)]) -> Result<(), Error> {
+        self.named_vals.push(HashMap::new());
+        compile_builtins(builtins, self);
         let module_ty = types::to_llvm(expr.type_, self)
             .error_span(expr.span)?
             .fn_type(&[], false);
@@ -69,6 +70,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         let entry = self.llvm.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
         let val = self.compile_expr(expr)?;
+        self.named_vals.pop().unwrap();
         self.builder.build_return(Some(&val)).unwrap();
         self.module.print_to_stderr();
         if let Err(e) = self.module.verify() {
@@ -91,6 +93,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         capture_ty: StructType<'ctx>,
         func: FunctionValue<'ctx>,
     ) -> Result<(), Error> {
+        self.named_vals.push(HashMap::new());
         let original_block = self.builder.get_insert_block().unwrap();
         let entry = self.llvm.append_basic_block(func, "entry");
         self.builder.position_at_end(entry);
@@ -105,7 +108,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
                 .builder
                 .build_extract_value(capture, i as u32, self.definitions.get_name(defn))
                 .unwrap();
-            self.named_vals.insert(defn, val);
+            self.named_vals.last_mut().unwrap().insert(defn, val);
         }
         for (i, target) in params.into_iter().enumerate() {
             let val = func.get_nth_param(i as u32 + 1).unwrap();
@@ -113,6 +116,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         }
         let val = self.compile_expr(body)?;
         self.builder.build_return(Some(&val)).unwrap();
+        self.named_vals.pop().unwrap();
         self.builder.position_at_end(original_block);
         Ok(())
     }
@@ -185,7 +189,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
     }
 
     fn compile_reference(&self, defn: DefnId) -> BasicValueEnum<'ctx> {
-        *self.named_vals.get(&defn).unwrap() // FIXME: polymorphism
+        *self.named_vals.last().unwrap().get(&defn).unwrap() // FIXME: polymorphism
     }
 
     fn compile_lambda(
@@ -351,7 +355,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         match target {
             DefnTarget::Ignore => {}
             DefnTarget::Symbol(id) => {
-                self.named_vals.insert(*id, value);
+                self.named_vals.last_mut().unwrap().insert(*id, value);
             }
             DefnTarget::Unpack(targets, _span) => {
                 let value = value.into_struct_value();

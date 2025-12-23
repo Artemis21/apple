@@ -3,6 +3,7 @@
         (fn inner ((y _)) _
             (* x y)
         )
+        (print (to_real x))
         inner
     ))
 

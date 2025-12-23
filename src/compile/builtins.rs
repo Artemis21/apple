@@ -19,7 +19,7 @@ pub fn compile_builtins<'ctx, 'obj>(
     for (builtin, defn) in builtins {
         let type_ = ctx.definitions.get_type(*defn).term; // TODO: polymorphism
         let val = compile_builtin(*builtin, type_, ctx);
-        ctx.named_vals.insert(*defn, val);
+        ctx.named_vals.last_mut().unwrap().insert(*defn, val);
     }
 }
 
