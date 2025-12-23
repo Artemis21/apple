@@ -6,17 +6,18 @@ use inkwell::{
     values::{BasicValue, BasicValueEnum, FunctionValue},
 };
 
-use crate::{Builtin, environment::DefnId, types::PolyType};
+use crate::{Builtin, DefnId, TypeRef};
 
 use super::{CompileCtx, types, unit_value};
 
 pub fn compile_builtins<'ctx, 'obj>(
-    builtins: &[(Builtin, DefnId, PolyType)],
+    builtins: &[(Builtin, DefnId)],
     ctx: &mut CompileCtx<'ctx, 'obj>,
 ) where
     'ctx: 'obj,
 {
-    for (builtin, defn, type_) in builtins {
+    for (builtin, defn) in builtins {
+        let type_ = ctx.definitions.get_type(*defn).term; // TODO: polymorphism
         let val = compile_builtin(*builtin, type_, ctx);
         ctx.named_vals.insert(*defn, val);
     }
@@ -24,13 +25,12 @@ pub fn compile_builtins<'ctx, 'obj>(
 
 fn compile_builtin<'ctx, 'obj>(
     builtin: Builtin,
-    type_: &PolyType,
+    type_: TypeRef,
     ctx: &CompileCtx<'ctx, 'obj>,
 ) -> BasicValueEnum<'ctx>
 where
     'ctx: 'obj,
 {
-    let type_ = type_.term; // TODO: polymorphism
     let fn_ty = types::fn_to_llvm(type_, ctx).expect("builtin type should be fully specified");
     let fn_val = ctx
         .module

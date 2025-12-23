@@ -90,6 +90,7 @@ impl TypeContext {
 
     pub fn generalise(&self, term: TypeRef, env: &Environment) -> PolyType {
         let bound_vars = env
+            .definitions
             .all_types()
             .flat_map(|polytype| FreeVariablesIter {
                 ctx: self,

@@ -1,21 +1,13 @@
-use crate::{
-    Environment, Type, TypeContext,
-    environment::DefnId,
-    types::{PolyType, TypeRef},
-};
+use crate::{DefnId, Environment, Type, TypeContext, TypeRef};
 
-pub fn initial_env(ctx: &mut TypeContext) -> (Environment, Vec<(Builtin, DefnId, PolyType)>) {
+pub fn initial_env(ctx: &mut TypeContext) -> (Environment, Vec<(Builtin, DefnId)>) {
     let mut env = Environment::default();
     let defns = BUILTINS
         .iter()
         .map(|b| {
             let monoty = b.type_(ctx);
             let polyty = ctx.generalise(monoty, &env);
-            (
-                *b,
-                env.define_symbol(b.name().to_string(), polyty.clone()),
-                polyty,
-            )
+            (*b, env.define_symbol(b.name().to_string(), polyty))
         })
         .collect();
     (env, defns)

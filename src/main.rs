@@ -1,4 +1,5 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::cast_possible_truncation)] // FIXME: handle these properly
 mod builtins;
 mod compile;
 mod environment;
@@ -16,7 +17,7 @@ use std::{
 
 use builtins::{Builtin, initial_env};
 use compile::compile;
-use environment::{DefnId, Environment};
+use environment::{Definitions, DefnId, Environment};
 use errors::{Error, ErrorCause, ResultExt, cause, error};
 use keywords::Keyword;
 use sexpr::{SExpr, Span};
@@ -43,7 +44,7 @@ fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
     texpr.debug_show_types(&src, &mut ctx);
     println!("{:?}", env);
     println!("{:#?}", texpr);*/
-    compile(texpr, &builtins, &ctx, dest)?;
+    compile(texpr, &builtins, &ctx, &env.definitions, dest)?;
     Ok(())
 }
 
@@ -65,7 +66,7 @@ fn type_expr(
         }),
         SExpr::Symbol(sym) => {
             let (defn_id, general_ty) = env.get(sym, span)?;
-            let type_ = ctx.specialise(&general_ty);
+            let type_ = ctx.specialise(general_ty);
             let expr = Box::new(Expr::Reference(defn_id));
             Ok(TExpr { type_, expr, span })
         }

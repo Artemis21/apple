@@ -27,10 +27,7 @@ pub fn to_llvm<'ctx>(
     ctx: &CompileCtx<'ctx, '_>,
 ) -> Result<BasicTypeEnum<'ctx>, Error> {
     match ctx.types.get(type_)? {
-        Type::Function(_params, _ret) => {
-            let addr = ptr(ctx.llvm).into();
-            Ok(ctx.llvm.struct_type(&[addr, addr], false).into())
-        }
+        Type::Function(_params, _ret) => Ok(func_ref(ctx.llvm).into()),
         Type::Tuple(components) => {
             let comps = components
                 .into_iter()
@@ -43,6 +40,11 @@ pub fn to_llvm<'ctx>(
         Type::Real => Ok(ctx.llvm.f32_type().into()),
         Type::Natural => Ok(ctx.llvm.i32_type().into()),
     }
+}
+
+pub fn func_ref(llvm: &Context) -> StructType<'_> {
+    let addr = ptr(llvm).into();
+    llvm.struct_type(&[addr, addr], false)
 }
 
 pub fn array_ref(llvm: &Context) -> StructType<'_> {

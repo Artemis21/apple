@@ -7,7 +7,7 @@ use inkwell::{
     IntPredicate, OptimizationLevel,
     builder::Builder,
     context::Context,
-    module::Module,
+    module::{Linkage, Module},
     passes::PassBuilderOptions,
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target as LlvmTarget, TargetMachine,
@@ -17,9 +17,8 @@ use inkwell::{
 };
 
 use crate::{
-    Builtin, DefnId, Error, Expr, For, PolyType, ResultExt, TExpr, Target as DefnTarget,
-    TypeContext, TypeRef,
-    typed_ast::{Call, If},
+    Builtin, Call, Definitions, DefnId, Error, Expr, For, If, Lambda, ResultExt, TExpr,
+    Target as DefnTarget, TypeContext, TypeRef, compile::types::func_ref,
 };
 
 use builtins::compile_builtins;
@@ -29,6 +28,7 @@ where
     'ctx: 'obj,
 {
     types: &'ctx TypeContext,
+    definitions: &'ctx Definitions,
     llvm: &'ctx Context,
     builder: &'obj Builder<'ctx>,
     module: &'obj Module<'ctx>,
@@ -37,8 +37,9 @@ where
 
 pub fn compile(
     expr: TExpr,
-    builtins: &[(Builtin, DefnId, PolyType)],
+    builtins: &[(Builtin, DefnId)],
     types: &TypeContext,
+    definitions: &Definitions,
     dest: &Path,
 ) -> Result<(), Error> {
     let llvm = Context::create();
@@ -47,6 +48,7 @@ pub fn compile(
     let mut named_vals = HashMap::new();
     let mut ctx = CompileCtx {
         types,
+        definitions,
         llvm: &llvm,
         builder: &builder,
         module: &module,
@@ -64,7 +66,12 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .error_span(expr.span)?
             .fn_type(&[], false);
         let main_fn = self.module.add_function("main", module_ty, None);
-        self.compile_function_body(expr, main_fn)?;
+        let main_lambda = Lambda {
+            params: vec![],
+            captures: vec![],
+            body: expr,
+        };
+        self.compile_function_body(main_lambda, main_fn)?;
         self.module.print_to_stderr();
         if let Err(e) = self.module.verify() {
             panic!("{}", e.to_str().unwrap());
@@ -78,13 +85,33 @@ impl<'ctx> CompileCtx<'ctx, '_> {
 
     fn compile_function_body(
         &mut self,
-        expr: TExpr,
+        Lambda {
+            params,
+            captures,
+            body,
+        }: Lambda,
         func: FunctionValue<'ctx>,
     ) -> Result<(), Error> {
+        let original_block = self.builder.get_insert_block();
         let entry = self.llvm.append_basic_block(func, "entry");
         self.builder.position_at_end(entry);
-        let val = self.compile_expr(expr)?;
+        for (i, defn) in captures.into_iter().enumerate() {
+            let capture = func.get_nth_param(0).unwrap().into_struct_value();
+            let val = self
+                .builder
+                .build_extract_value(capture, i as u32, "capture")
+                .unwrap();
+            self.named_vals.insert(defn, val);
+        }
+        for (i, target) in params.into_iter().enumerate() {
+            let val = func.get_nth_param(i as u32 + 1).unwrap();
+            self.unpack_value(&target, val);
+        }
+        let val = self.compile_expr(body)?;
         self.builder.build_return(Some(&val)).unwrap();
+        if let Some(block) = original_block {
+            self.builder.position_at_end(block);
+        }
         Ok(())
     }
 
@@ -94,13 +121,13 @@ impl<'ctx> CompileCtx<'ctx, '_> {
     ) -> Result<BasicValueEnum<'ctx>, Error> {
         match *expr {
             Expr::Call(call) => self.compile_call(call, type_),
-            Expr::Reference(defn) => Ok(*self.named_vals.get(&defn).unwrap()), // FIXME: polymorphism
+            Expr::Reference(defn) => Ok(self.compile_reference(defn)),
             Expr::Define(target, expr) => {
                 let value = self.compile_expr(expr)?;
                 self.unpack_value(&target, value);
                 Ok(unit_value(self.llvm))
             }
-            Expr::Lambda(lambda) => todo!(),
+            Expr::Lambda(lambda) => self.compile_lambda(lambda, type_),
             Expr::For(for_) => self.compile_for(for_),
             Expr::If(if_) => self.compile_if(if_),
             Expr::Block(exprs) => {
@@ -153,6 +180,61 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic())
+    }
+
+    fn compile_reference(&self, defn: DefnId) -> BasicValueEnum<'ctx> {
+        *self.named_vals.get(&defn).unwrap() // FIXME: polymorphism
+    }
+
+    fn compile_lambda(
+        &mut self,
+        lambda_expr: Lambda,
+        type_: TypeRef,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        // build capture struct
+        let capture_tys = lambda_expr
+            .captures
+            .iter() // FIXME: polymorphism
+            .map(|defn| types::to_llvm(self.definitions.get_type(*defn).term, self))
+            .collect::<Result<Vec<_>, _>>()?;
+        let capture_ty = self.llvm.struct_type(&capture_tys, false);
+        let mut capture = capture_ty.get_undef().into();
+        for (i, defn) in lambda_expr.captures.iter().enumerate() {
+            let val = self.compile_reference(*defn);
+            capture = self
+                .builder
+                .build_insert_value(capture, val, i as u32, "lambda_capture")
+                .unwrap();
+        }
+        let capture_ptr = self
+            .builder
+            .build_alloca(capture_ty, "lambda_capture_ptr")
+            .unwrap();
+        self.builder.build_store(capture_ptr, capture).unwrap();
+        let current_block = self.builder.get_insert_block().unwrap();
+
+        // build function taking capture struct ptr
+        let func = self.module.add_function(
+            "lambda",
+            types::fn_to_llvm(type_, self)?,
+            Some(Linkage::Private),
+        );
+        self.compile_function_body(lambda_expr, func)?;
+
+        // evaluate to { struct ptr, fn ptr }
+        self.builder.position_at_end(current_block);
+        let fn_ptr = func.as_global_value().as_pointer_value();
+        let lambda_ty = func_ref(self.llvm);
+        let mut lambda = lambda_ty.get_undef().into();
+        lambda = self
+            .builder
+            .build_insert_value(lambda, fn_ptr, 0, "lambda")
+            .unwrap();
+        lambda = self
+            .builder
+            .build_insert_value(lambda, capture_ptr, 1, "lambda")
+            .unwrap();
+        Ok(lambda.into_struct_value().into())
     }
 
     fn compile_for(

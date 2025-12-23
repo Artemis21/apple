@@ -11,17 +11,36 @@ use std::{
 pub struct Environment {
     lower_frames: Vec<Frame>,
     top_frame: Frame,
-    symbols: Vec<Symbol>,
+    pub definitions: Definitions,
 }
 
-/// An index into `Environment::symbols`, uniquely identifying a definition (even
-/// in the presence of shadowing).
+/// An index into `Environment::definitions`, uniquely identifying a definition
+/// (even in the presence of shadowing).
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct DefnId(usize);
 
 #[derive(Debug, Default)]
+pub struct Definitions(Vec<(Symbol, PolyType)>);
+
+impl Definitions {
+    pub fn get_type(&self, id: DefnId) -> &PolyType {
+        &self.0[id.0].1
+    }
+
+    fn push(&mut self, symbol: Symbol, ty: PolyType) -> DefnId {
+        let id = DefnId(self.0.len());
+        self.0.push((symbol, ty));
+        id
+    }
+
+    pub fn all_types(&self) -> impl Iterator<Item = &PolyType> {
+        self.0.iter().map(|(_sym, ty)| ty)
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct Frame {
-    locals: HashMap<Symbol, (DefnId, PolyType)>,
+    locals: HashMap<Symbol, DefnId>,
     captures: HashSet<DefnId>,
 }
 
@@ -97,37 +116,30 @@ impl Environment {
     }
 
     pub fn define_symbol(&mut self, symbol: Symbol, ty: PolyType) -> DefnId {
-        let id = DefnId(self.symbols.len());
-        self.symbols.push(symbol.clone());
-        self.top_frame.locals.insert(symbol, (id, ty));
+        let id = self.definitions.push(symbol.clone(), ty);
+        self.top_frame.locals.insert(symbol, id);
         id
     }
 
-    pub fn get(&mut self, name: &SymbolRef, span: Span) -> Result<(DefnId, PolyType), Error> {
-        let (depth, (id, ty)) = self
+    pub fn get(&mut self, name: &SymbolRef, span: Span) -> Result<(DefnId, &PolyType), Error> {
+        let (depth, id) = self
             .frames()
             .enumerate()
-            .find_map(|(depth, frame)| Some((depth, frame.locals.get(name)?.clone())))
+            .find_map(|(depth, frame)| Some((depth, *frame.locals.get(name)?)))
             .ok_or_else(|| error!("undefined reference to {name:?}").with_span(span))?;
         if depth > 0 {
             for frame in self.mut_frames().take(depth - 1) {
                 frame.captures.insert(id);
             }
         }
-        Ok((id, ty))
-    }
-
-    pub fn all_types(&self) -> impl Iterator<Item = &PolyType> {
-        self.frames()
-            .flat_map(|frame| frame.locals.values())
-            .map(|(_, ty)| ty)
+        Ok((id, self.definitions.get_type(id)))
     }
 
     #[allow(dead_code)]
     pub fn debug_dump(&self, ctx: &mut TypeContext) {
         for frame in self.frames() {
-            for (name, (_, type_)) in &frame.locals {
-                let monotype = ctx.specialise(type_);
+            for (name, id) in &frame.locals {
+                let monotype = ctx.specialise(self.definitions.get_type(*id));
                 println!("{name}: {}", ctx.display(monotype));
             }
         }

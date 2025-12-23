@@ -1,5 +1,9 @@
 (block
-    (print 43.0)
+    (let two _ 2)
+
+    (fn double ((x _)) _ (* x two))
+
+    (print (to_real (double 10)))
     (, (.. 6 8) (+ 4.0 1.0))
     (for i (.. 1 10) (block
         (print (to_real (* i 10)))
