@@ -11,29 +11,68 @@ pub struct TExpr {
 
 #[derive(Debug)]
 pub enum Expr {
-    Call(TExpr, Vec<TExpr>),
+    Call(Call),
     Reference(DefnId),
     Define(Target, TExpr),
-    Lambda {
-        params: Vec<Target>,
-        captures: Vec<DefnId>,
-        body: TExpr,
-    },
-    For {
-        target: Target,
-        elem_ty: TypeRef,
-        iter: TExpr,
-        body: TExpr,
-    },
-    If {
-        cond: TExpr,
-        then: TExpr,
-        else_: TExpr,
-    },
+    Lambda(Lambda),
+    For(For),
+    If(If),
     Block(Vec<TExpr>),
     Tuple(Vec<TExpr>),
     LiteralReal(f32),
     LiteralNatural(u32),
+}
+
+#[derive(Debug)]
+pub struct Call {
+    pub callee: TExpr,
+    pub args: Vec<TExpr>,
+}
+
+impl From<Call> for Box<Expr> {
+    fn from(call: Call) -> Self {
+        Self::new(Expr::Call(call))
+    }
+}
+
+#[derive(Debug)]
+pub struct Lambda {
+    pub params: Vec<Target>,
+    pub captures: Vec<DefnId>,
+    pub body: TExpr,
+}
+
+impl From<Lambda> for Box<Expr> {
+    fn from(lambda: Lambda) -> Self {
+        Self::new(Expr::Lambda(lambda))
+    }
+}
+
+#[derive(Debug)]
+pub struct For {
+    pub target: Target,
+    pub elem_ty: TypeRef,
+    pub iter: TExpr,
+    pub body: TExpr,
+}
+
+impl From<For> for Box<Expr> {
+    fn from(for_: For) -> Self {
+        Self::new(Expr::For(for_))
+    }
+}
+
+#[derive(Debug)]
+pub struct If {
+    pub cond: TExpr,
+    pub then: TExpr,
+    pub else_: TExpr,
+}
+
+impl From<If> for Box<Expr> {
+    fn from(if_: If) -> Self {
+        Self::new(Expr::If(if_))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -61,21 +100,21 @@ impl TExpr {
             Label::new(self.span.into()).with_message(format!("{}", ctx.display(self.type_))),
         );
         match self.expr.as_ref() {
-            Expr::Call(f, args) => {
-                f.debug_get_labels(labels, ctx);
+            Expr::Call(Call { callee, args }) => {
+                callee.debug_get_labels(labels, ctx);
                 for arg in args {
                     arg.debug_get_labels(labels, ctx);
                 }
             }
             Expr::Reference(_) | Expr::LiteralReal(_) | Expr::LiteralNatural(_) => {}
-            Expr::Define(_, val) | Expr::Lambda { body: val, .. } => {
+            Expr::Define(_, val) | Expr::Lambda(Lambda { body: val, .. }) => {
                 val.debug_get_labels(labels, ctx);
             }
-            Expr::For { iter, body, .. } => {
+            Expr::For(For { iter, body, .. }) => {
                 iter.debug_get_labels(labels, ctx);
                 body.debug_get_labels(labels, ctx);
             }
-            Expr::If { cond, then, else_ } => {
+            Expr::If(If { cond, then, else_ }) => {
                 cond.debug_get_labels(labels, ctx);
                 then.debug_get_labels(labels, ctx);
                 else_.debug_get_labels(labels, ctx);

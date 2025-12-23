@@ -28,7 +28,7 @@ pub struct TypeRef(usize);
 #[derive(Debug, Clone)]
 pub struct PolyType {
     quantified: HashSet<TypeRef>,
-    term: TypeRef,
+    pub term: TypeRef,
 }
 
 impl PolyType {

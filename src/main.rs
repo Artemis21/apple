@@ -1,6 +1,6 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 mod builtins;
-mod codegen;
+mod compile;
 mod environment;
 mod errors;
 mod keywords;
@@ -15,12 +15,12 @@ use std::{
 };
 
 use builtins::{Builtin, initial_env};
-use codegen::compile;
+use compile::compile;
 use environment::{DefnId, Environment};
 use errors::{Error, ErrorCause, ResultExt, cause, error};
 use keywords::Keyword;
 use sexpr::{SExpr, Span};
-use typed_ast::{Expr, TExpr, Target};
+use typed_ast::{Call, Expr, For, If, Lambda, TExpr, Target};
 use types::{PolyType, Type, TypeContext, TypeRef};
 
 type Symbol = String;
@@ -43,7 +43,7 @@ fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
     texpr.debug_show_types(&src, &mut ctx);
     println!("{:?}", env);
     println!("{:#?}", texpr);*/
-    compile(texpr, builtins, &mut ctx, dest)?;
+    compile(texpr, &builtins, &ctx, dest)?;
     Ok(())
 }
 
@@ -73,21 +73,21 @@ fn type_expr(
         SExpr::List(exprs) => match exprs.split_first() {
             Some(((SExpr::Keyword(kw), _kw_span), args)) => kw.typeck(span, args, env, ctx),
             Some((func_e, arg_es)) => {
-                let func = type_expr(func_e, env, ctx)?;
+                let callee = type_expr(func_e, env, ctx)?;
                 let args = arg_es
                     .iter()
                     .map(|arg_e| type_expr(arg_e, env, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 let arg_tys = args.iter().map(|arg| arg.type_).collect();
                 let result_ty = ctx.fresh();
-                ctx.unify_with_concrete(func.type_, Type::Function(arg_tys, result_ty))
+                ctx.unify_with_concrete(callee.type_, Type::Function(arg_tys, result_ty))
                     .error_cause(cause!(
                         Some(span),
                         "function arguments must match parameters"
                     ))?;
                 Ok(TExpr {
                     type_: result_ty,
-                    expr: Box::new(Expr::Call(func, args)),
+                    expr: Call { callee, args }.into(),
                     span,
                 })
             }

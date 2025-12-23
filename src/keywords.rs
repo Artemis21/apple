@@ -2,8 +2,8 @@
 use std::fmt::Display;
 
 use crate::{
-    Environment, Error, Expr, ResultExt, SExpr, Span, Symbol, SymbolRef, TExpr, Target, Type,
-    TypeContext, cause, error, type_expr,
+    Environment, Error, Expr, For, If, Lambda, ResultExt, SExpr, Span, Symbol, SymbolRef, TExpr,
+    Target, Type, TypeContext, cause, error, type_expr,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -102,11 +102,13 @@ fn typeck_fn(
     let fn_id = env.define_symbol(name, ctx.generalise(func_ty, env));
     let lambda = TExpr {
         type_: func_ty,
-        expr: Box::new(Expr::Lambda {
+        expr: Lambda {
             params,
             captures,
             body,
-        }),
+        }
+        .into(),
+
         span,
     };
     Ok(TExpr {
@@ -134,12 +136,13 @@ fn typeck_for(
     let body = type_expr(&args[2], env, ctx)?;
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::For {
+        expr: For {
             target,
             elem_ty,
             iter,
             body,
-        }),
+        }
+        .into(),
         span,
     })
 }
@@ -162,7 +165,7 @@ fn typeck_if(
         .error_cause(cause!(Some(span), "if branches must be of the same type"))?;
     Ok(TExpr {
         type_: then.type_,
-        expr: Box::new(Expr::If { cond, then, else_ }),
+        expr: If { cond, then, else_ }.into(),
         span,
     })
 }
