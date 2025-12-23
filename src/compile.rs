@@ -353,7 +353,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
                 self.named_vals.insert(*id, value);
             }
             DefnTarget::Unpack(targets, _span) => {
-                let value = value.into_array_value();
+                let value = value.into_struct_value();
                 for (i, target) in targets.iter().enumerate() {
                     let component = self
                         .builder

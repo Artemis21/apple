@@ -1,16 +1,19 @@
 (block
-    (let two _ 2)
-
-    (fn double ((x _)) _ (* x two))
-
-    (print (to_real (double 10)))
-    (, (.. 6 8) (+ 4.0 1.0))
-    (for i (.. 1 10) (block
-        (print (to_real (* i 10)))
-        (print (normal 0.0 0.0))
-    ))
-    (if (< 12.0 (+ 5.5 5.5))
-        (* 10 2)
-        30
+    (fn print_mapped_array ((arr _) (f _)) _
+        (for i arr
+            (print (f i))
+        )
     )
+
+    (let (factor limit) _ (, 2 10.0))
+
+    (fn weird ((x _)) _ (block
+        (let y _ (to_real (* x factor)))
+        (if (< y limit)
+            (+ y 1.0)
+            (normal 0.0 1.0)
+        )
+    ))
+
+    (print_mapped_array (.. 1 10) weird)
 )
