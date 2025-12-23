@@ -1,19 +1,10 @@
 (block
-    (fn print_mapped_array ((arr _) (f _)) _
-        (for i arr
-            (print (f i))
+    (fn curry_mul ((x _)) _ (block
+        (fn inner ((y _)) _
+            (* x y)
         )
-    )
-
-    (let (factor limit) _ (, 2 10.0))
-
-    (fn weird ((x _)) _ (block
-        (let y _ (to_real (* x factor)))
-        (if (< y limit)
-            (+ y 1.0)
-            (normal 0.0 1.0)
-        )
+        inner
     ))
 
-    (print_mapped_array (.. 1 10) weird)
+    ((curry_mul 3) 4)
 )

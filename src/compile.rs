@@ -12,7 +12,7 @@ use inkwell::{
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target as LlvmTarget, TargetMachine,
     },
-    types::BasicType,
+    types::{BasicType, StructType},
     values::{BasicValue, BasicValueEnum, FunctionValue},
 };
 
@@ -66,12 +66,10 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .error_span(expr.span)?
             .fn_type(&[], false);
         let main_fn = self.module.add_function("main", module_ty, None);
-        let main_lambda = Lambda {
-            params: vec![],
-            captures: vec![],
-            body: expr,
-        };
-        self.compile_function_body(main_lambda, main_fn)?;
+        let entry = self.llvm.append_basic_block(main_fn, "entry");
+        self.builder.position_at_end(entry);
+        let val = self.compile_expr(expr)?;
+        self.builder.build_return(Some(&val)).unwrap();
         self.module.print_to_stderr();
         if let Err(e) = self.module.verify() {
             panic!("{}", e.to_str().unwrap());
@@ -90,16 +88,22 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             captures,
             body,
         }: Lambda,
+        capture_ty: StructType<'ctx>,
         func: FunctionValue<'ctx>,
     ) -> Result<(), Error> {
-        let original_block = self.builder.get_insert_block();
+        let original_block = self.builder.get_insert_block().unwrap();
         let entry = self.llvm.append_basic_block(func, "entry");
         self.builder.position_at_end(entry);
+        let capture_ptr = func.get_nth_param(0).unwrap().into_pointer_value();
+        let capture = self
+            .builder
+            .build_load(capture_ty, capture_ptr, "capture")
+            .unwrap()
+            .into_struct_value();
         for (i, defn) in captures.into_iter().enumerate() {
-            let capture = func.get_nth_param(0).unwrap().into_struct_value();
             let val = self
                 .builder
-                .build_extract_value(capture, i as u32, "capture")
+                .build_extract_value(capture, i as u32, self.definitions.get_name(defn))
                 .unwrap();
             self.named_vals.insert(defn, val);
         }
@@ -109,9 +113,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         }
         let val = self.compile_expr(body)?;
         self.builder.build_return(Some(&val)).unwrap();
-        if let Some(block) = original_block {
-            self.builder.position_at_end(block);
-        }
+        self.builder.position_at_end(original_block);
         Ok(())
     }
 
@@ -191,6 +193,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         lambda_expr: Lambda,
         type_: TypeRef,
     ) -> Result<BasicValueEnum<'ctx>, Error> {
+        // TODO: don't capture constants. lambdas with no captures are themselves constants.
         // build capture struct
         let capture_tys = lambda_expr
             .captures
@@ -206,12 +209,11 @@ impl<'ctx> CompileCtx<'ctx, '_> {
                 .build_insert_value(capture, val, i as u32, "lambda_capture")
                 .unwrap();
         }
-        let capture_ptr = self
+        let capture_ptr = self // TODO: memory management!?
             .builder
-            .build_alloca(capture_ty, "lambda_capture_ptr")
+            .build_malloc(capture_ty, "lambda_capture_ptr")
             .unwrap();
         self.builder.build_store(capture_ptr, capture).unwrap();
-        let current_block = self.builder.get_insert_block().unwrap();
 
         // build function taking capture struct ptr
         let func = self.module.add_function(
@@ -219,10 +221,9 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             types::fn_to_llvm(type_, self)?,
             Some(Linkage::Private),
         );
-        self.compile_function_body(lambda_expr, func)?;
+        self.compile_function_body(lambda_expr, capture_ty, func)?;
 
         // evaluate to { struct ptr, fn ptr }
-        self.builder.position_at_end(current_block);
         let fn_ptr = func.as_global_value().as_pointer_value();
         let lambda_ty = func_ref(self.llvm);
         let mut lambda = lambda_ty.get_undef().into();

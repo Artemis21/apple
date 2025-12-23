@@ -1,16 +1,26 @@
 (block
+    (fn curry_add ((x _)) _ (block
+        (fn inner ((y _)) _
+            (+ x y)
+        )
+        inner
+    ))
 
-(fn foo ((x _) (y _)) _ (+ (* 2.0 x) y))
+    (fn print_mapped_array ((arr _) (f _)) _
+        (for i arr
+            (print (f i))
+        )
+    )
 
-(let (x y) _ (, 1000.0 1.0))
+    (let (factor limit) _ (, 2 10.0))
 
-(print (, (.. 1 10) (< y 2.0) (,)))
+    (fn weird ((x _)) _ (block
+        (let y _ (to_real (* x factor)))
+        (if (< y limit)
+            ((curry_add y) 1.0)
+            (normal 0.0 1.0)
+        )
+    ))
 
-(for i (.. 1 100000) (block
-    (let j _ i)
-    (if (< (to_real i) 10.0) (print (foo (to_real i) (to_real j))) (,))
-    (let x _ (- x 0.001))
-))
-
-x
+    (print_mapped_array (.. 1 10) weird)
 )

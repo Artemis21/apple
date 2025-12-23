@@ -27,6 +27,10 @@ impl Definitions {
         &self.0[id.0].1
     }
 
+    pub fn get_name(&self, id: DefnId) -> &SymbolRef {
+        &self.0[id.0].0
+    }
+
     fn push(&mut self, symbol: Symbol, ty: PolyType) -> DefnId {
         let id = DefnId(self.0.len());
         self.0.push((symbol, ty));
@@ -127,10 +131,8 @@ impl Environment {
             .enumerate()
             .find_map(|(depth, frame)| Some((depth, *frame.locals.get(name)?)))
             .ok_or_else(|| error!("undefined reference to {name:?}").with_span(span))?;
-        if depth > 0 {
-            for frame in self.mut_frames().take(depth - 1) {
-                frame.captures.insert(id);
-            }
+        for frame in self.mut_frames().take(depth) {
+            frame.captures.insert(id);
         }
         Ok((id, self.definitions.get_type(id)))
     }
@@ -146,10 +148,10 @@ impl Environment {
     }
 
     fn frames(&self) -> impl Iterator<Item = &Frame> {
-        once(&self.top_frame).chain(self.lower_frames.iter())
+        once(&self.top_frame).chain(self.lower_frames.iter().rev())
     }
 
     fn mut_frames(&mut self) -> impl Iterator<Item = &mut Frame> {
-        once(&mut self.top_frame).chain(self.lower_frames.iter_mut())
+        once(&mut self.top_frame).chain(self.lower_frames.iter_mut().rev())
     }
 }
