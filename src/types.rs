@@ -164,27 +164,17 @@ impl TypeContext {
 
     fn unify_concrete(&mut self, t1: Type, t2: Type) -> Result<(), Error> {
         match (t1, t2) {
-            (Type::Function(params1, ret1), Type::Function(params2, ret2)) => {
-                if params1.len() != params2.len() {
-                    Err(error!(
-                        "couldn't match function types, different number of parameters ({} != {})",
-                        params1.len(),
-                        params2.len()
-                    ))?;
-                }
+            (Type::Function(params1, ret1), Type::Function(params2, ret2))
+                if params1.len() == params2.len() =>
+            {
                 for (t1, t2) in zip(params1, params2) {
                     self.unify(t1, t2)?;
                 }
                 self.unify(ret1, ret2)
             }
-            (Type::Tuple(components1), Type::Tuple(components2)) => {
-                if components1.len() != components2.len() {
-                    Err(error!(
-                        "couldn't match tuple types, different number of components ({} != {})",
-                        components1.len(),
-                        components2.len()
-                    ))?;
-                }
+            (Type::Tuple(components1), Type::Tuple(components2))
+                if components1.len() == components2.len() =>
+            {
                 for (t1, t2) in zip(components1, components2) {
                     self.unify(t1, t2)?;
                 }
