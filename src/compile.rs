@@ -17,8 +17,8 @@ use inkwell::{
 };
 
 use crate::{
-    Builtin, Call, Definitions, DefnId, Error, Expr, For, If, Lambda, ResultExt, TExpr,
-    Target as DefnTarget, TypeContext, TypeRef, compile::types::func_ref,
+    Builtin, Call, Definitions, DefnId, Expr, For, If, Lambda, TExpr, Target as DefnTarget,
+    TypeContext, TypeRef, compile::types::func_ref,
 };
 
 use builtins::compile_builtins;
@@ -41,7 +41,7 @@ pub fn compile(
     types: &TypeContext,
     definitions: &Definitions,
     dest: &Path,
-) -> Result<(), Error> {
+) {
     let llvm = Context::create();
     let module = llvm.create_module("main");
     let builder = llvm.create_builder();
@@ -54,22 +54,19 @@ pub fn compile(
         module: &module,
         named_vals: &mut named_vals,
     };
-    ctx.compile_module(expr, builtins)?;
+    ctx.compile_module(expr, builtins);
     link(ctx.module, dest);
-    Ok(())
 }
 
 impl<'ctx> CompileCtx<'ctx, '_> {
-    fn compile_module(&mut self, expr: TExpr, builtins: &[(Builtin, DefnId)]) -> Result<(), Error> {
+    fn compile_module(&mut self, expr: TExpr, builtins: &[(Builtin, DefnId)]) {
         self.named_vals.push(HashMap::new());
         compile_builtins(builtins, self);
-        let module_ty = types::to_llvm(expr.type_, self)
-            .error_span(expr.span)?
-            .fn_type(&[], false);
+        let module_ty = types::to_llvm(expr.type_, self).fn_type(&[], false);
         let main_fn = self.module.add_function("main", module_ty, None);
         let entry = self.llvm.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
-        let val = self.compile_expr(expr)?;
+        let val = self.compile_expr(expr);
         self.named_vals.pop().unwrap();
         self.builder.build_return(Some(&val)).unwrap();
         self.module.print_to_stderr();
@@ -80,7 +77,6 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .run_passes("default<O3>", &machine(), PassBuilderOptions::create())
             .unwrap();
         self.module.print_to_stderr();
-        Ok(())
     }
 
     fn compile_function_body(
@@ -92,7 +88,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         }: Lambda,
         capture_ty: StructType<'ctx>,
         func: FunctionValue<'ctx>,
-    ) -> Result<(), Error> {
+    ) {
         self.named_vals.push(HashMap::new());
         let original_block = self.builder.get_insert_block().unwrap();
         let entry = self.llvm.append_basic_block(func, "entry");
@@ -114,24 +110,20 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             let val = func.get_nth_param(i as u32 + 1).unwrap();
             self.unpack_value(&target, val);
         }
-        let val = self.compile_expr(body)?;
+        let val = self.compile_expr(body);
         self.builder.build_return(Some(&val)).unwrap();
         self.named_vals.pop().unwrap();
         self.builder.position_at_end(original_block);
-        Ok(())
     }
 
-    fn compile_expr(
-        &mut self,
-        TExpr { type_, expr, span }: TExpr,
-    ) -> Result<BasicValueEnum<'ctx>, Error> {
+    fn compile_expr(&mut self, TExpr { type_, expr, .. }: TExpr) -> BasicValueEnum<'ctx> {
         match *expr {
             Expr::Call(call) => self.compile_call(call, type_),
-            Expr::Reference(defn) => Ok(self.compile_reference(defn)),
+            Expr::Reference(defn) => self.compile_reference(defn),
             Expr::Define(target, expr) => {
-                let value = self.compile_expr(expr)?;
+                let value = self.compile_expr(expr);
                 self.unpack_value(&target, value);
-                Ok(unit_value(self.llvm))
+                unit_value(self.llvm)
             }
             Expr::Lambda(lambda) => self.compile_lambda(lambda, type_),
             Expr::For(for_) => self.compile_for(for_),
@@ -139,17 +131,14 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             Expr::Block(exprs) => {
                 let mut last = unit_value(self.llvm);
                 for expr in exprs {
-                    last = self.compile_expr(expr)?;
+                    last = self.compile_expr(expr);
                 }
-                Ok(last)
+                last
             }
-            Expr::Tuple(components) => self.compile_tuple(type_, components)?,
-            Expr::LiteralReal(val) => Ok(self.llvm.f32_type().const_float(val.into()).into()),
-            Expr::LiteralNatural(val) => {
-                Ok(self.llvm.i32_type().const_int(val.into(), false).into())
-            }
+            Expr::Tuple(components) => self.compile_tuple(type_, components),
+            Expr::LiteralReal(val) => self.llvm.f32_type().const_float(val.into()).into(),
+            Expr::LiteralNatural(val) => self.llvm.i32_type().const_int(val.into(), false).into(),
         }
-        .error_span(span)
     }
 
     fn compile_call(
@@ -159,8 +148,8 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             args: arg_exprs,
         }: Call,
         type_: TypeRef,
-    ) -> Result<BasicValueEnum<'ctx>, Error> {
-        let closure_pair = self.compile_expr(callee)?.into_struct_value();
+    ) -> BasicValueEnum<'ctx> {
+        let closure_pair = self.compile_expr(callee).into_struct_value();
         let fn_ptr = self
             .builder
             .build_extract_value(closure_pair, 0, "fn")
@@ -174,36 +163,31 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         let mut args = vec![capture.into()];
         let mut arg_tys = vec![capture.get_type().into()];
         for arg_expr in arg_exprs {
-            let arg = self.compile_expr(arg_expr)?;
+            let arg = self.compile_expr(arg_expr);
             args.push(arg.into());
             arg_tys.push(arg.get_type().into());
         }
-        let ret_ty = types::to_llvm(type_, self)?;
+        let ret_ty = types::to_llvm(type_, self);
         let fn_ty = ret_ty.fn_type(&arg_tys, false);
-        Ok(self
-            .builder
+        self.builder
             .build_indirect_call(fn_ty, fn_ptr, &args, "")
             .unwrap()
             .try_as_basic_value()
-            .unwrap_basic())
+            .unwrap_basic()
     }
 
     fn compile_reference(&self, defn: DefnId) -> BasicValueEnum<'ctx> {
         *self.named_vals.last().unwrap().get(&defn).unwrap() // FIXME: polymorphism
     }
 
-    fn compile_lambda(
-        &mut self,
-        lambda_expr: Lambda,
-        type_: TypeRef,
-    ) -> Result<BasicValueEnum<'ctx>, Error> {
+    fn compile_lambda(&mut self, lambda_expr: Lambda, type_: TypeRef) -> BasicValueEnum<'ctx> {
         // TODO: don't capture constants. lambdas with no captures are themselves constants.
         // build capture struct
         let capture_tys = lambda_expr
             .captures
             .iter() // FIXME: polymorphism
             .map(|defn| types::to_llvm(self.definitions.get_type(*defn).term, self))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
         let capture_ty = self.llvm.struct_type(&capture_tys, false);
         let mut capture = capture_ty.get_undef().into();
         for (i, defn) in lambda_expr.captures.iter().enumerate() {
@@ -222,10 +206,10 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         // build function taking capture struct ptr
         let func = self.module.add_function(
             "lambda",
-            types::fn_to_llvm(type_, self)?,
+            types::fn_to_llvm(type_, self),
             Some(Linkage::Private),
         );
-        self.compile_function_body(lambda_expr, capture_ty, func)?;
+        self.compile_function_body(lambda_expr, capture_ty, func);
 
         // evaluate to { struct ptr, fn ptr }
         let fn_ptr = func.as_global_value().as_pointer_value();
@@ -239,7 +223,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .builder
             .build_insert_value(lambda, capture_ptr, 1, "lambda")
             .unwrap();
-        Ok(lambda.into_struct_value().into())
+        lambda.into_struct_value().into()
     }
 
     fn compile_for(
@@ -250,14 +234,14 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             iter,
             body: body_expr,
         }: For,
-    ) -> Result<BasicValueEnum<'ctx>, Error> {
+    ) -> BasicValueEnum<'ctx> {
         let start = self.builder.get_insert_block().unwrap();
         let head = self.llvm.insert_basic_block_after(start, "for_head");
         let body = self.llvm.insert_basic_block_after(head, "for_body");
         let tail = self.llvm.insert_basic_block_after(body, "for_tail");
 
         // start: load array to iterate
-        let iter_val = self.compile_expr(iter)?.into_struct_value();
+        let iter_val = self.compile_expr(iter).into_struct_value();
         let array_ptr = self
             .builder
             .build_extract_value(iter_val, 0, "array")
@@ -285,7 +269,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
 
         // body: get element, run body expr, increment idx
         self.builder.position_at_end(body);
-        let elem_ty = types::to_llvm(elem_ty, self)?;
+        let elem_ty = types::to_llvm(elem_ty, self);
         let elem_ptr = unsafe {
             self.builder
                 .build_gep(elem_ty, array_ptr, &[idx], "elptr")
@@ -293,7 +277,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         };
         let elem = self.builder.build_load(elem_ty, elem_ptr, "elem").unwrap();
         self.unpack_value(&target, elem);
-        self.compile_expr(body_expr)?;
+        self.compile_expr(body_expr);
         let inc_idx = self
             .builder
             .build_int_add(idx, idx_ty.const_int(1, false), "inc idx")
@@ -303,26 +287,26 @@ impl<'ctx> CompileCtx<'ctx, '_> {
 
         // tail: continue executing
         self.builder.position_at_end(tail);
-        Ok(unit_value(self.llvm))
+        unit_value(self.llvm)
     }
 
-    fn compile_if(&mut self, If { cond, then, else_ }: If) -> Result<BasicValueEnum<'ctx>, Error> {
+    fn compile_if(&mut self, If { cond, then, else_ }: If) -> BasicValueEnum<'ctx> {
         let start = self.builder.get_insert_block().unwrap();
         let then_blk = self.llvm.insert_basic_block_after(start, "then");
         let else_blk = self.llvm.insert_basic_block_after(then_blk, "else");
         let after = self.llvm.insert_basic_block_after(else_blk, "after if");
 
-        let cond_val = self.compile_expr(cond)?.into_int_value();
+        let cond_val = self.compile_expr(cond).into_int_value();
         self.builder
             .build_conditional_branch(cond_val, then_blk, else_blk)
             .unwrap();
 
         self.builder.position_at_end(then_blk);
-        let then_val = self.compile_expr(then)?;
+        let then_val = self.compile_expr(then);
         self.builder.build_unconditional_branch(after).unwrap();
 
         self.builder.position_at_end(else_blk);
-        let else_val = self.compile_expr(else_)?;
+        let else_val = self.compile_expr(else_);
         self.builder.build_unconditional_branch(after).unwrap();
 
         self.builder.position_at_end(after);
@@ -331,24 +315,20 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .build_phi(then_val.get_type(), "if result")
             .unwrap();
         result.add_incoming(&[(&then_val, then_blk), (&else_val, else_blk)]);
-        Ok(result.as_basic_value())
+        result.as_basic_value()
     }
 
-    fn compile_tuple(
-        &mut self,
-        type_: TypeRef,
-        components: Vec<TExpr>,
-    ) -> Result<Result<BasicValueEnum<'ctx>, Error>, Error> {
-        let struct_ty = types::to_llvm(type_, self)?.into_struct_type();
+    fn compile_tuple(&mut self, type_: TypeRef, components: Vec<TExpr>) -> BasicValueEnum<'ctx> {
+        let struct_ty = types::to_llvm(type_, self).into_struct_type();
         let mut tuple = struct_ty.get_undef().into();
         for (i, component) in components.into_iter().enumerate() {
-            let val = self.compile_expr(component)?;
+            let val = self.compile_expr(component);
             tuple = self
                 .builder
                 .build_insert_value(tuple, val, i as u32, "component")
                 .unwrap();
         }
-        Ok(Ok(tuple.into_struct_value().into()))
+        tuple.into_struct_value().into()
     }
 
     fn unpack_value(&mut self, target: &DefnTarget, value: BasicValueEnum<'ctx>) {

@@ -3,42 +3,36 @@ use inkwell::{
     types::{BasicType, BasicTypeEnum, FunctionType, IntType, PointerType, StructType},
 };
 
-use crate::{Error, Type, TypeRef};
+use crate::{Type, TypeRef};
 
 use super::{CompileCtx, machine};
 
-pub fn fn_to_llvm<'ctx>(
-    type_: TypeRef,
-    ctx: &CompileCtx<'ctx, '_>,
-) -> Result<FunctionType<'ctx>, Error> {
-    let Type::Function(params, ret) = ctx.types.get(type_)? else {
+pub fn fn_to_llvm<'ctx>(type_: TypeRef, ctx: &CompileCtx<'ctx, '_>) -> FunctionType<'ctx> {
+    let Type::Function(params, ret) = ctx.types.get(type_).expect("unbound type variable") else {
         panic!("expected function type")
     };
-    let ret_ty = to_llvm(ret, ctx)?;
+    let ret_ty = to_llvm(ret, ctx);
     let mut param_tys = vec![ptr(ctx.llvm).into()]; // first argument is captures
     for param in params {
-        param_tys.push(to_llvm(param, ctx)?.into());
+        param_tys.push(to_llvm(param, ctx).into());
     }
-    Ok(ret_ty.fn_type(&param_tys, false))
+    ret_ty.fn_type(&param_tys, false)
 }
 
-pub fn to_llvm<'ctx>(
-    type_: TypeRef,
-    ctx: &CompileCtx<'ctx, '_>,
-) -> Result<BasicTypeEnum<'ctx>, Error> {
-    match ctx.types.get(type_)? {
-        Type::Function(_params, _ret) => Ok(func_ref(ctx.llvm).into()),
+pub fn to_llvm<'ctx>(type_: TypeRef, ctx: &CompileCtx<'ctx, '_>) -> BasicTypeEnum<'ctx> {
+    match ctx.types.get(type_).expect("unbound type variable") {
+        Type::Function(_params, _ret) => func_ref(ctx.llvm).into(),
         Type::Tuple(components) => {
             let comps = components
                 .into_iter()
                 .map(|comp| to_llvm(comp, ctx))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(ctx.llvm.struct_type(&comps, false).into())
+                .collect::<Vec<_>>();
+            ctx.llvm.struct_type(&comps, false).into()
         }
-        Type::Array(_element) => Ok(array_ref(ctx.llvm).into()),
-        Type::Bool => Ok(ctx.llvm.bool_type().into()),
-        Type::Real => Ok(ctx.llvm.f32_type().into()),
-        Type::Natural => Ok(ctx.llvm.i32_type().into()),
+        Type::Array(_element) => array_ref(ctx.llvm).into(),
+        Type::Bool => ctx.llvm.bool_type().into(),
+        Type::Real => ctx.llvm.f32_type().into(),
+        Type::Natural => ctx.llvm.i32_type().into(),
     }
 }
 

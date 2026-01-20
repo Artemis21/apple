@@ -44,7 +44,7 @@ fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
     texpr.debug_show_types(&src, &mut ctx);
     println!("{:?}", env);
     println!("{:#?}", texpr);*/
-    compile(texpr, &builtins, &ctx, &env.definitions, dest)?;
+    compile(texpr, &builtins, &ctx, &env.definitions, dest);
     Ok(())
 }
 

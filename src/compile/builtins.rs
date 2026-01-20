@@ -31,7 +31,7 @@ fn compile_builtin<'ctx, 'obj>(
 where
     'ctx: 'obj,
 {
-    let fn_ty = types::fn_to_llvm(type_, ctx).expect("builtin type should be fully specified");
+    let fn_ty = types::fn_to_llvm(type_, ctx);
     let fn_val = ctx
         .module
         .add_function(builtin.name(), fn_ty, Some(Linkage::Private));

@@ -51,14 +51,14 @@ impl Error {
 }
 
 pub trait ResultExt {
-    fn error_span(self, span: Span) -> Self;
+    //fn error_span(self, span: Span) -> Self;
     fn error_cause(self, cause: ErrorCause) -> Self;
 }
 
 impl<T> ResultExt for Result<T, Error> {
-    fn error_span(self, span: Span) -> Self {
+    /*fn error_span(self, span: Span) -> Self {
         self.map_err(|e| e.with_span(span))
-    }
+    }*/
 
     fn error_cause(self, cause: ErrorCause) -> Self {
         self.map_err(|e| e.with_cause(cause))

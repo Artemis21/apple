@@ -81,10 +81,10 @@ impl TypeContext {
         DisplayType { type_, ctx: self }
     }
 
-    pub fn get(&self, tr: TypeRef) -> Result<Type, Error> {
+    pub fn get(&self, tr: TypeRef) -> Option<Type> {
         match self.resolve(tr) {
-            ResolvedType::Free(_) => Err(error!("could not determine type")),
-            ResolvedType::Bound(ty) => Ok(ty),
+            ResolvedType::Free(_) => None,
+            ResolvedType::Bound(ty) => Some(ty),
         }
     }
 
