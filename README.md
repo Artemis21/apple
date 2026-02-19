@@ -2,6 +2,18 @@
 
 A very minimal functional compiler, written in Rust with an LLVM backend.
 
+Currently implemented:
+
+* Hindley-Milner type inference
+* Basic first class functions
+* A few primitives
+
+Currently not implemented:
+
+* Monomorphisation (so some programs will just break)
+* Some primitives (eg. `normal` output is random, but does not follow a normal distribution)
+* A prettier syntax
+
 Example:
 
 ```
