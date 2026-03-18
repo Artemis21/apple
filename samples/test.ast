@@ -7,9 +7,10 @@
     ))
 
     (fn print_mapped_array ((arr _) (f _)) _
-        (for i arr
+        (for i arr (block
+            (to_real i)
             (print (f i))
-        )
+        ))
     )
 
     (let (factor limit) _ (, 2 10.0))

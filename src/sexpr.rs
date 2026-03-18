@@ -91,6 +91,7 @@ impl Display for SExpr {
                         write!(f, " {subexpr}")?;
                     }
                 }
+                f.write_char(')')?;
                 Ok(())
             }
             Self::Symbol(s) => s.fmt(f),

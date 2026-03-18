@@ -1,0 +1,13 @@
+(block
+    (fn id ((x _)) _ x)
+
+    (fn const ((x _)) _ (block
+        (fn inner ((y _)) _ x)
+        inner
+    ))
+
+    (if (id (< 1.0 2.0))
+        (print ((const (id 3.0)) 4.0))
+        (print ((const 6.0) 7.0))
+    )
+)

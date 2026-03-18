@@ -72,7 +72,7 @@ fn typeck_let(
     }
     let sym_target = parse_target(&args[0])?;
     let value = type_expr(&args[2], env, ctx)?;
-    let target = env.unpack_generalise_define(sym_target, value.type_, ctx)?;
+    let target = env.unpack_define(sym_target, value.type_, ctx)?;
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
         expr: Box::new(Expr::Define(target, value)),
@@ -99,7 +99,8 @@ fn typeck_fn(
     let body = type_expr(&args[3], env, ctx)?;
     let captures = env.pop();
     let func_ty = ctx.const_type(Type::Function(param_tys, body.type_));
-    let fn_id = env.define_symbol(name, ctx.generalise(func_ty, env));
+    let polyty = ctx.generalise(func_ty, env);
+    let fn_id = env.define_symbol(name, polyty);
     let lambda = TExpr {
         type_: func_ty,
         expr: Lambda {

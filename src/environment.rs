@@ -36,10 +36,6 @@ impl Definitions {
         self.0.push((symbol, ty));
         id
     }
-
-    pub fn all_types(&self) -> impl Iterator<Item = &PolyType> {
-        self.0.iter().map(|(_sym, ty)| ty)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -65,20 +61,27 @@ impl Environment {
         .collect()
     }
 
-    pub fn unpack_generalise_define(
+    pub fn live_types(&self) -> impl Iterator<Item = &PolyType> {
+        self.frames().flat_map(|frame| {
+            frame
+                .locals
+                .values()
+                .map(|defn| self.definitions.get_type(*defn))
+        })
+    }
+
+    pub fn unpack_define(
         &mut self,
         target: Target<Symbol>,
         ty: TypeRef,
         ctx: &mut TypeContext,
     ) -> Result<Target<DefnId>, Error> {
         match target {
-            Target::Symbol(name) => {
-                let polyty = ctx.generalise(ty, self);
-                Ok(Target::Symbol(self.define_symbol(name, polyty)))
-            }
+            Target::Symbol(name) => Ok(Target::Symbol(
+                self.define_symbol(name, PolyType::unquantified(ty)),
+            )),
             Target::Ignore => Ok(Target::Ignore),
             Target::Unpack(targets, span) => {
-                // NB: unify must happen before we generalise
                 let component_ts: Vec<_> = targets.iter().map(|_| ctx.fresh()).collect();
                 ctx.unify_with_concrete(ty, Type::Tuple(component_ts.clone()))
                     .error_cause(cause!(
@@ -87,7 +90,7 @@ impl Environment {
                     ))?;
                 Ok(Target::Unpack(
                     zip(targets, component_ts)
-                        .map(|(tgt, cmpt)| self.unpack_generalise_define(tgt, cmpt, ctx))
+                        .map(|(tgt, cmpt)| self.unpack_define(tgt, cmpt, ctx))
                         .collect::<Result<_, _>>()?,
                     span,
                 ))
@@ -141,8 +144,8 @@ impl Environment {
     pub fn debug_dump(&self, ctx: &mut TypeContext) {
         for frame in self.frames() {
             for (name, id) in &frame.locals {
-                let monotype = ctx.specialise(self.definitions.get_type(*id));
-                println!("{name}: {}", ctx.display(monotype));
+                let pt = self.definitions.get_type(*id);
+                println!("{name}: {}", ctx.display_poly(pt));
             }
         }
     }

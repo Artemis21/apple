@@ -40,8 +40,8 @@ fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
     let mut ctx = TypeContext::new();
     let (mut env, builtins) = initial_env(&mut ctx);
     let texpr = type_expr(&expr, &mut env, &mut ctx)?;
-    /*env.debug_dump(&mut ctx);
-    texpr.debug_show_types(&src, &mut ctx);
+    env.debug_dump(&mut ctx);
+    /*texpr.debug_show_types(&src, &mut ctx);
     println!("{:?}", env);
     println!("{:#?}", texpr);*/
     compile(texpr, &builtins, &ctx, &env.definitions, dest);

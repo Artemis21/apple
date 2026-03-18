@@ -25,6 +25,12 @@ impl Type {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeRef(usize);
 
+impl Display for TypeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "t{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PolyType {
     quantified: HashSet<TypeRef>,
@@ -81,6 +87,10 @@ impl TypeContext {
         DisplayType { type_, ctx: self }
     }
 
+    pub const fn display_poly<'a>(&'a self, pt: &'a PolyType) -> DisplayPolytype<'a> {
+        DisplayPolytype { pt, ctx: self }
+    }
+
     pub fn get(&self, tr: TypeRef) -> Option<Type> {
         match self.resolve(tr) {
             ResolvedType::Free(_) => None,
@@ -90,23 +100,21 @@ impl TypeContext {
 
     pub fn generalise(&self, term: TypeRef, env: &Environment) -> PolyType {
         let bound_vars = env
-            .definitions
-            .all_types()
+            .live_types()
             .flat_map(|polytype| FreeVariablesIter {
                 ctx: self,
                 exclude: polytype.quantified.clone(),
                 terms: vec![polytype.term],
             })
             .collect();
-        let free_vars = FreeVariablesIter {
+        let quantified = FreeVariablesIter {
             ctx: self,
             exclude: bound_vars,
             terms: vec![term],
-        };
-        PolyType {
-            quantified: free_vars.into_iter().collect(),
-            term,
         }
+        .into_iter()
+        .collect();
+        PolyType { quantified, term }
     }
 
     pub fn specialise(&mut self, pt: &PolyType) -> TypeRef {
@@ -278,7 +286,7 @@ pub struct DisplayTypeRef<'a> {
 impl Display for DisplayTypeRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.ctx.resolve(self.type_) {
-            ResolvedType::Free(var) => write!(f, "t{}", var.0),
+            ResolvedType::Free(var) => var.fmt(f),
             ResolvedType::Bound(concrete) => self.ctx.display_concrete(&concrete).fmt(f),
         }
     }
@@ -319,5 +327,28 @@ impl Display for DisplayType<'_> {
             Type::Natural => f.write_str("nat"),
             Type::Real => f.write_str("real"),
         }
+    }
+}
+
+pub struct DisplayPolytype<'a> {
+    pt: &'a PolyType,
+    ctx: &'a TypeContext,
+}
+
+impl Display for DisplayPolytype<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.pt.quantified.is_empty() {
+            f.write_char('<')?;
+            let mut first = true;
+            for qt in &self.pt.quantified {
+                if !first {
+                    f.write_str(", ")?;
+                }
+                qt.fmt(f)?;
+                first = false;
+            }
+            f.write_str("> ")?;
+        }
+        self.ctx.display(self.pt.term).fmt(f)
     }
 }
