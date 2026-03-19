@@ -22,7 +22,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeRef(usize);
 
 impl Display for TypeRef {
@@ -33,7 +33,7 @@ impl Display for TypeRef {
 
 #[derive(Debug, Clone)]
 pub struct PolyType {
-    quantified: HashSet<TypeRef>,
+    pub quantified: HashSet<TypeRef>,
     pub term: TypeRef,
 }
 
@@ -60,11 +60,15 @@ enum ResolvedType {
 
 pub struct TypeContext {
     variables: Vec<TypeVar>,
+    mappings: Vec<HashMap<TypeRef, TypeRef>>,
 }
 
 impl TypeContext {
     pub const fn new() -> Self {
-        Self { variables: vec![] }
+        Self {
+            variables: vec![],
+            mappings: vec![],
+        }
     }
 
     pub fn fresh(&mut self) -> TypeRef {
@@ -112,14 +116,14 @@ impl TypeContext {
             exclude: bound_vars,
             terms: vec![term],
         }
-        .into_iter()
         .collect();
         PolyType { quantified, term }
     }
 
-    pub fn specialise(&mut self, pt: &PolyType) -> TypeRef {
+    pub fn specialise(&mut self, pt: &PolyType) -> (TypeRef, HashMap<TypeRef, TypeRef>) {
         let fresh = pt.quantified.iter().map(|qt| (*qt, self.fresh())).collect();
-        self.instantiate_mapped(pt.term, &fresh)
+        let specialised = self.instantiate_mapped(pt.term, &fresh);
+        (specialised, fresh)
     }
 
     fn instantiate_mapped(
@@ -127,6 +131,7 @@ impl TypeContext {
         type_: TypeRef,
         mapping: &HashMap<TypeRef, TypeRef>,
     ) -> TypeRef {
+        assert!(self.mappings.is_empty());
         if let Some(replacement) = mapping.get(&type_) {
             *replacement
         } else {
@@ -201,6 +206,7 @@ impl TypeContext {
     }
 
     fn substitute(&mut self, free_var: TypeRef, type_: ResolvedType) -> Result<(), Error> {
+        assert!(self.mappings.is_empty());
         match type_ {
             ResolvedType::Free(v2) if v2 == free_var => Ok(()),
             ResolvedType::Free(v2) => {
@@ -239,11 +245,52 @@ impl TypeContext {
     }
 
     fn resolve(&self, t_ref: TypeRef) -> ResolvedType {
+        for mapping in self.mappings.iter().rev() {
+            if let Some(mapped) = mapping.get(&t_ref) {
+                return self.resolve(*mapped); // TODO: cycle detection?
+            }
+        }
         match &self.variables[t_ref.0] {
             TypeVar::Free => ResolvedType::Free(t_ref),
             TypeVar::Bound(t) => ResolvedType::Bound(t.clone()),
             TypeVar::Substituted(r) => self.resolve(*r),
         }
+    }
+
+    pub fn concrete_many_types_equal(&self, ts1: &[TypeRef], ts2: &[TypeRef]) -> bool {
+        ts1.len() == ts2.len()
+            && ts1
+                .iter()
+                .zip(ts2.iter())
+                .all(|(t1, t2)| self.concrete_types_equal(*t1, *t2))
+    }
+
+    pub fn concrete_types_equal(&self, t1: TypeRef, t2: TypeRef) -> bool {
+        match (self.resolve(t1), self.resolve(t2)) {
+            (ResolvedType::Bound(t1), ResolvedType::Bound(t2)) => match (t1, t2) {
+                (Type::Function(params1, ret1), Type::Function(params2, ret2)) => {
+                    self.concrete_many_types_equal(&params1, &params2)
+                        && self.concrete_types_equal(ret1, ret2)
+                }
+                (Type::Tuple(els1), Type::Tuple(els2)) => {
+                    self.concrete_many_types_equal(&els1, &els2)
+                }
+                (Type::Array(t1), Type::Array(t2)) => self.concrete_types_equal(t1, t2),
+                (Type::Bool, Type::Bool)
+                | (Type::Natural, Type::Natural)
+                | (Type::Real, Type::Real) => true,
+                _ => false,
+            },
+            _ => panic!("expected concrete types"),
+        }
+    }
+
+    pub fn push_mapping(&mut self, assignment: HashMap<TypeRef, TypeRef>) {
+        self.mappings.push(assignment);
+    }
+
+    pub fn pop_mapping(&mut self) {
+        self.mappings.pop().unwrap();
     }
 }
 
@@ -257,6 +304,7 @@ impl Iterator for FreeVariablesIter<'_> {
     type Item = TypeRef;
 
     fn next(&mut self) -> Option<Self::Item> {
+        assert!(self.ctx.mappings.is_empty());
         let term = self.terms.pop()?;
         if self.exclude.contains(&term) {
             return None;

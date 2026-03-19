@@ -141,7 +141,7 @@ impl Environment {
     }
 
     #[allow(dead_code)]
-    pub fn debug_dump(&self, ctx: &mut TypeContext) {
+    pub fn debug_dump(&self, ctx: &TypeContext) {
         for frame in self.frames() {
             for (name, id) in &frame.locals {
                 let pt = self.definitions.get_type(*id);

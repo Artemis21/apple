@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use ariadne::{Label, Report, ReportKind, Source};
 
 use crate::{DefnId, Span, TypeContext, TypeRef};
@@ -12,8 +14,8 @@ pub struct TExpr {
 #[derive(Debug)]
 pub enum Expr {
     Call(Call),
-    Reference(DefnId),
-    Define(Target, TExpr),
+    Reference(Reference),
+    Define(Define),
     Lambda(Lambda),
     For(For),
     If(If),
@@ -32,6 +34,33 @@ pub struct Call {
 impl From<Call> for Box<Expr> {
     fn from(call: Call) -> Self {
         Self::new(Expr::Call(call))
+    }
+}
+
+#[derive(Debug)]
+pub struct Reference {
+    pub defn: DefnId,
+    pub specialise: HashMap<TypeRef, TypeRef>, // from quantified to concrete types
+}
+
+impl From<Reference> for Box<Expr> {
+    fn from(reference: Reference) -> Self {
+        Self::new(Expr::Reference(reference))
+    }
+}
+
+#[derive(Debug)]
+pub struct Define {
+    pub target: Target,
+    pub body: TExpr,
+    /// Invariant: if `generalise` is nonempty then `body` is side-effect free
+    /// (so we can do monomorphisation).
+    pub generalise: HashSet<TypeRef>, // quantified types
+}
+
+impl From<Define> for Box<Expr> {
+    fn from(define: Define) -> Self {
+        Self::new(Expr::Define(define))
     }
 }
 
@@ -107,8 +136,8 @@ impl TExpr {
                 }
             }
             Expr::Reference(_) | Expr::LiteralReal(_) | Expr::LiteralNatural(_) => {}
-            Expr::Define(_, val) | Expr::Lambda(Lambda { body: val, .. }) => {
-                val.debug_get_labels(labels, ctx);
+            Expr::Define(Define { body, .. }) | Expr::Lambda(Lambda { body, .. }) => {
+                body.debug_get_labels(labels, ctx);
             }
             Expr::For(For { iter, body, .. }) => {
                 iter.debug_get_labels(labels, ctx);

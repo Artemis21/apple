@@ -16,10 +16,9 @@ use inkwell::{
     values::{BasicValue, BasicValueEnum, FunctionValue},
 };
 
-use crate::{
-    Builtin, Call, Definitions, DefnId, Expr, For, If, Lambda, TExpr, Target as DefnTarget,
-    TypeContext, TypeRef, compile::types::func_ref,
-};
+use crate::mono_ast::{Call, Closure, Expr, For, If, Reference, TExpr, Target as DefnTarget};
+use crate::{Builtin, Definitions, DefnId, TypeContext, TypeRef};
+use types::func_ref;
 
 use builtins::compile_builtins;
 
@@ -27,47 +26,53 @@ struct CompileCtx<'ctx, 'obj>
 where
     'ctx: 'obj,
 {
-    types: &'ctx TypeContext,
+    types: &'ctx mut TypeContext,
     definitions: &'ctx Definitions,
     llvm: &'ctx Context,
     builder: &'obj Builder<'ctx>,
     module: &'obj Module<'ctx>,
-    named_vals: &'obj mut Vec<HashMap<DefnId, BasicValueEnum<'ctx>>>,
+    frames: &'obj mut Vec<Frame<'ctx>>,
+}
+
+#[derive(Default)]
+struct Frame<'ctx> {
+    locals: HashMap<DefnId, BasicValueEnum<'ctx>>,
+    closures: HashMap<DefnId, Vec<(Vec<TypeRef>, BasicValueEnum<'ctx>)>>,
 }
 
 pub fn compile(
-    expr: TExpr,
+    expr: &TExpr,
     builtins: &[(Builtin, DefnId)],
-    types: &TypeContext,
+    types: &mut TypeContext,
     definitions: &Definitions,
     dest: &Path,
 ) {
     let llvm = Context::create();
     let module = llvm.create_module("main");
     let builder = llvm.create_builder();
-    let mut named_vals = Vec::new();
+    let mut frames = Vec::new();
     let mut ctx = CompileCtx {
         types,
         definitions,
         llvm: &llvm,
         builder: &builder,
         module: &module,
-        named_vals: &mut named_vals,
+        frames: &mut frames,
     };
     ctx.compile_module(expr, builtins);
     link(ctx.module, dest);
 }
 
 impl<'ctx> CompileCtx<'ctx, '_> {
-    fn compile_module(&mut self, expr: TExpr, builtins: &[(Builtin, DefnId)]) {
-        self.named_vals.push(HashMap::new());
+    fn compile_module(&mut self, expr: &TExpr, builtins: &[(Builtin, DefnId)]) {
+        self.frames.push(Frame::default());
         compile_builtins(builtins, self);
         let module_ty = types::to_llvm(expr.type_, self).fn_type(&[], false);
         let main_fn = self.module.add_function("main", module_ty, None);
         let entry = self.llvm.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
         let val = self.compile_expr(expr);
-        self.named_vals.pop().unwrap();
+        self.frames.pop().unwrap();
         self.builder.build_return(Some(&val)).unwrap();
         self.module.print_to_stderr();
         if let Err(e) = self.module.verify() {
@@ -81,15 +86,13 @@ impl<'ctx> CompileCtx<'ctx, '_> {
 
     fn compile_function_body(
         &mut self,
-        Lambda {
-            params,
-            captures,
-            body,
-        }: Lambda,
+        body: &TExpr,
+        params: &[DefnTarget],
+        captures: &[Reference],
         capture_ty: StructType<'ctx>,
         func: FunctionValue<'ctx>,
     ) {
-        self.named_vals.push(HashMap::new());
+        self.frames.push(Frame::default());
         let original_block = self.builder.get_insert_block().unwrap();
         let entry = self.llvm.append_basic_block(func, "entry");
         self.builder.position_at_end(entry);
@@ -99,33 +102,53 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .build_load(capture_ty, capture_ptr, "capture")
             .unwrap()
             .into_struct_value();
-        for (i, defn) in captures.into_iter().enumerate() {
+        for (i, refr) in captures.iter().enumerate() {
             let val = self
                 .builder
-                .build_extract_value(capture, i as u32, self.definitions.get_name(defn))
+                .build_extract_value(capture, i as u32, self.definitions.get_name(refr.defn_id()))
                 .unwrap();
-            self.named_vals.last_mut().unwrap().insert(defn, val);
+            let frame = self.frames.last_mut().unwrap();
+            match refr {
+                Reference::Local(defn) => {
+                    frame.locals.insert(*defn, val);
+                }
+                Reference::Closure(defn, inst) => {
+                    frame
+                        .closures
+                        .entry(*defn)
+                        .or_default()
+                        .push((inst.clone(), val));
+                }
+            }
         }
-        for (i, target) in params.into_iter().enumerate() {
+        for (i, target) in params.iter().enumerate() {
             let val = func.get_nth_param(i as u32 + 1).unwrap();
-            self.unpack_value(&target, val);
+            self.unpack_local(target, val);
         }
         let val = self.compile_expr(body);
         self.builder.build_return(Some(&val)).unwrap();
-        self.named_vals.pop().unwrap();
+        self.frames.pop().unwrap();
         self.builder.position_at_end(original_block);
     }
 
-    fn compile_expr(&mut self, TExpr { type_, expr, .. }: TExpr) -> BasicValueEnum<'ctx> {
-        match *expr {
-            Expr::Call(call) => self.compile_call(call, type_),
-            Expr::Reference(defn) => self.compile_reference(defn),
-            Expr::Define(target, expr) => {
+    fn compile_expr(&mut self, TExpr { type_, expr, .. }: &TExpr) -> BasicValueEnum<'ctx> {
+        match &**expr {
+            Expr::Call(call) => self.compile_call(call, *type_),
+            Expr::Reference(refr) => self.compile_reference(refr),
+            Expr::LetLocal(target, expr) => {
                 let value = self.compile_expr(expr);
-                self.unpack_value(&target, value);
+                self.unpack_local(target, value);
                 unit_value(self.llvm)
             }
-            Expr::Lambda(lambda) => self.compile_lambda(lambda, type_),
+            Expr::LetClosure(defn, closure) => {
+                let instances = self.compile_closure(closure);
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .closures
+                    .insert(*defn, instances);
+                unit_value(self.llvm)
+            }
             Expr::For(for_) => self.compile_for(for_),
             Expr::If(if_) => self.compile_if(if_),
             Expr::Block(exprs) => {
@@ -135,9 +158,13 @@ impl<'ctx> CompileCtx<'ctx, '_> {
                 }
                 last
             }
-            Expr::Tuple(components) => self.compile_tuple(type_, components),
-            Expr::LiteralReal(val) => self.llvm.f32_type().const_float(val.into()).into(),
-            Expr::LiteralNatural(val) => self.llvm.i32_type().const_int(val.into(), false).into(),
+            Expr::Tuple(components) => self.compile_tuple(*type_, components),
+            Expr::LiteralReal(val) => self.llvm.f32_type().const_float(f64::from(*val)).into(),
+            Expr::LiteralNatural(val) => self
+                .llvm
+                .i32_type()
+                .const_int(u64::from(*val), false)
+                .into(),
         }
     }
 
@@ -146,7 +173,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         Call {
             callee,
             args: arg_exprs,
-        }: Call,
+        }: &Call,
         type_: TypeRef,
     ) -> BasicValueEnum<'ctx> {
         let closure_pair = self.compile_expr(callee).into_struct_value();
@@ -176,54 +203,89 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             .unwrap_basic()
     }
 
-    fn compile_reference(&self, defn: DefnId) -> BasicValueEnum<'ctx> {
-        *self.named_vals.last().unwrap().get(&defn).unwrap() // FIXME: polymorphism
+    fn compile_reference(&self, refr: &Reference) -> BasicValueEnum<'ctx> {
+        let frame = self.frames.last().unwrap();
+        match refr {
+            Reference::Local(defn) => *frame.locals.get(defn).unwrap(),
+            Reference::Closure(defn, inst) => {
+                frame
+                    .closures
+                    .get(defn)
+                    .unwrap()
+                    .iter()
+                    .find(|(asgn, _)| self.types.concrete_many_types_equal(asgn, inst))
+                    .unwrap()
+                    .1
+            }
+        }
     }
 
-    fn compile_lambda(&mut self, lambda_expr: Lambda, type_: TypeRef) -> BasicValueEnum<'ctx> {
-        // TODO: don't capture constants. lambdas with no captures are themselves constants.
-        // build capture struct
-        let capture_tys = lambda_expr
-            .captures
-            .iter() // FIXME: polymorphism
-            .map(|defn| types::to_llvm(self.definitions.get_type(*defn).term, self))
-            .collect::<Vec<_>>();
-        let capture_ty = self.llvm.struct_type(&capture_tys, false);
-        let mut capture = capture_ty.get_undef().into();
-        for (i, defn) in lambda_expr.captures.iter().enumerate() {
-            let val = self.compile_reference(*defn);
-            capture = self
-                .builder
-                .build_insert_value(capture, val, i as u32, "lambda_capture")
-                .unwrap();
-        }
-        let capture_ptr = self // TODO: memory management!?
-            .builder
-            .build_malloc(capture_ty, "lambda_capture_ptr")
-            .unwrap();
-        self.builder.build_store(capture_ptr, capture).unwrap();
+    fn compile_closure(
+        &mut self,
+        Closure {
+            captures,
+            params,
+            body,
+            quantified,
+            instances,
+            type_,
+        }: &Closure,
+    ) -> Vec<(Vec<TypeRef>, BasicValueEnum<'ctx>)> {
+        instances
+            .iter()
+            .map(|assignment| {
+                let mapping = quantified
+                    .iter()
+                    .copied()
+                    .zip(assignment.iter().copied())
+                    .collect();
+                self.types.push_mapping(mapping);
+                // FIXME: add { quantified |-> assignment } to self.types
+                let capture_vals = captures
+                    .iter()
+                    .map(|refr| self.compile_reference(refr))
+                    .collect::<Vec<_>>();
+                let capture_tys = capture_vals
+                    .iter()
+                    .map(BasicValueEnum::get_type)
+                    .collect::<Vec<_>>();
+                let capture_ty = self.llvm.struct_type(&capture_tys, false);
+                let mut capture = capture_ty.get_undef().into();
+                for (i, val) in capture_vals.into_iter().enumerate() {
+                    capture = self
+                        .builder
+                        .build_insert_value(capture, val, i as u32, "closure_capture")
+                        .unwrap();
+                }
+                let capture_ptr = self // TODO: memory management!?
+                    .builder
+                    .build_malloc(capture_ty, "closure_capture_ptr")
+                    .unwrap();
+                self.builder.build_store(capture_ptr, capture).unwrap();
 
-        // build function taking capture struct ptr
-        let func = self.module.add_function(
-            "lambda",
-            types::fn_to_llvm(type_, self),
-            Some(Linkage::Private),
-        );
-        self.compile_function_body(lambda_expr, capture_ty, func);
+                // build function taking capture struct ptr
+                let func = self.module.add_function(
+                    "closure",
+                    types::fn_to_llvm(*type_, self),
+                    Some(Linkage::Private),
+                );
+                self.compile_function_body(body, params, captures, capture_ty, func);
 
-        // evaluate to { struct ptr, fn ptr }
-        let fn_ptr = func.as_global_value().as_pointer_value();
-        let lambda_ty = func_ref(self.llvm);
-        let mut lambda = lambda_ty.get_undef().into();
-        lambda = self
-            .builder
-            .build_insert_value(lambda, fn_ptr, 0, "lambda")
-            .unwrap();
-        lambda = self
-            .builder
-            .build_insert_value(lambda, capture_ptr, 1, "lambda")
-            .unwrap();
-        lambda.into_struct_value().into()
+                // evaluate to { struct ptr, fn ptr }
+                let fn_ptr = func.as_global_value().as_pointer_value();
+                let closure_ty = func_ref(self.llvm);
+                let mut closure = closure_ty.get_undef().into();
+                closure = self
+                    .builder
+                    .build_insert_value(closure, fn_ptr, 0, "closure")
+                    .unwrap();
+                closure = self
+                    .builder
+                    .build_insert_value(closure, capture_ptr, 1, "closure")
+                    .unwrap();
+                (assignment.clone(), closure.into_struct_value().into())
+            })
+            .collect()
     }
 
     fn compile_for(
@@ -233,7 +295,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
             elem_ty,
             iter,
             body: body_expr,
-        }: For,
+        }: &For,
     ) -> BasicValueEnum<'ctx> {
         let start = self.builder.get_insert_block().unwrap();
         let head = self.llvm.insert_basic_block_after(start, "for_head");
@@ -269,14 +331,14 @@ impl<'ctx> CompileCtx<'ctx, '_> {
 
         // body: get element, run body expr, increment idx
         self.builder.position_at_end(body);
-        let elem_ty = types::to_llvm(elem_ty, self);
+        let elem_ty = types::to_llvm(*elem_ty, self);
         let elem_ptr = unsafe {
             self.builder
                 .build_gep(elem_ty, array_ptr, &[idx], "elptr")
                 .unwrap()
         };
         let elem = self.builder.build_load(elem_ty, elem_ptr, "elem").unwrap();
-        self.unpack_value(&target, elem);
+        self.unpack_local(target, elem);
         self.compile_expr(body_expr);
         let inc_idx = self
             .builder
@@ -290,7 +352,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         unit_value(self.llvm)
     }
 
-    fn compile_if(&mut self, If { cond, then, else_ }: If) -> BasicValueEnum<'ctx> {
+    fn compile_if(&mut self, If { cond, then, else_ }: &If) -> BasicValueEnum<'ctx> {
         let start = self.builder.get_insert_block().unwrap();
         let then_blk = self.llvm.insert_basic_block_after(start, "then");
         let else_blk = self.llvm.insert_basic_block_after(then_blk, "else");
@@ -318,10 +380,10 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         result.as_basic_value()
     }
 
-    fn compile_tuple(&mut self, type_: TypeRef, components: Vec<TExpr>) -> BasicValueEnum<'ctx> {
+    fn compile_tuple(&mut self, type_: TypeRef, components: &[TExpr]) -> BasicValueEnum<'ctx> {
         let struct_ty = types::to_llvm(type_, self).into_struct_type();
         let mut tuple = struct_ty.get_undef().into();
-        for (i, component) in components.into_iter().enumerate() {
+        for (i, component) in components.iter().enumerate() {
             let val = self.compile_expr(component);
             tuple = self
                 .builder
@@ -331,11 +393,11 @@ impl<'ctx> CompileCtx<'ctx, '_> {
         tuple.into_struct_value().into()
     }
 
-    fn unpack_value(&mut self, target: &DefnTarget, value: BasicValueEnum<'ctx>) {
+    fn unpack_local(&mut self, target: &DefnTarget, value: BasicValueEnum<'ctx>) {
         match target {
             DefnTarget::Ignore => {}
             DefnTarget::Symbol(id) => {
-                self.named_vals.last_mut().unwrap().insert(*id, value);
+                self.frames.last_mut().unwrap().locals.insert(*id, value);
             }
             DefnTarget::Unpack(targets, _span) => {
                 let value = value.into_struct_value();
@@ -344,7 +406,7 @@ impl<'ctx> CompileCtx<'ctx, '_> {
                         .builder
                         .build_extract_value(value, i as u32, "component")
                         .unwrap();
-                    self.unpack_value(target, component);
+                    self.unpack_local(target, component);
                 }
             }
         }

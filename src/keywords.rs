@@ -1,9 +1,9 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
-use std::fmt::Display;
+use std::{collections::HashSet, fmt::Display};
 
 use crate::{
-    Environment, Error, Expr, For, If, Lambda, ResultExt, SExpr, Span, Symbol, SymbolRef, TExpr,
-    Target, Type, TypeContext, cause, error, type_expr,
+    Define, Environment, Error, Expr, For, If, Lambda, ResultExt, SExpr, Span, Symbol, SymbolRef,
+    TExpr, Target, Type, TypeContext, cause, error, type_expr,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -71,11 +71,17 @@ fn typeck_let(
         return Err(error!("let takes 3 args: (let target type value)").with_span(span));
     }
     let sym_target = parse_target(&args[0])?;
-    let value = type_expr(&args[2], env, ctx)?;
-    let target = env.unpack_define(sym_target, value.type_, ctx)?;
+    let body = type_expr(&args[2], env, ctx)?;
+    let target = env.unpack_define(sym_target, body.type_, ctx)?;
+    let expr = Define {
+        target,
+        body,
+        generalise: HashSet::new(), // only generalise fns (for now)
+    }
+    .into();
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::Define(target, value)),
+        expr,
         span,
     })
 }
@@ -100,21 +106,25 @@ fn typeck_fn(
     let captures = env.pop();
     let func_ty = ctx.const_type(Type::Function(param_tys, body.type_));
     let polyty = ctx.generalise(func_ty, env);
-    let fn_id = env.define_symbol(name, polyty);
+    let fn_id = env.define_symbol(name, polyty.clone());
     let lambda = TExpr {
         type_: func_ty,
+        span,
         expr: Lambda {
             params,
             captures,
             body,
         }
         .into(),
-
-        span,
     };
     Ok(TExpr {
         type_: ctx.const_type(Type::unit()),
-        expr: Box::new(Expr::Define(Target::Symbol(fn_id), lambda)),
+        expr: Define {
+            target: Target::Symbol(fn_id),
+            body: lambda,
+            generalise: polyty.quantified,
+        }
+        .into(),
         span,
     })
 }

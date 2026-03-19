@@ -5,6 +5,7 @@ mod compile;
 mod environment;
 mod errors;
 mod keywords;
+mod mono_ast;
 mod sexpr;
 mod typed_ast;
 mod types;
@@ -21,7 +22,7 @@ use environment::{Definitions, DefnId, Environment};
 use errors::{Error, ErrorCause, ResultExt, cause, error};
 use keywords::Keyword;
 use sexpr::{SExpr, Span};
-use typed_ast::{Call, Expr, For, If, Lambda, TExpr, Target};
+use typed_ast::{Call, Define, Expr, For, If, Lambda, Reference, TExpr, Target};
 use types::{PolyType, Type, TypeContext, TypeRef};
 
 type Symbol = String;
@@ -35,16 +36,21 @@ fn main() {
     }
 }
 
+fn to_mono(typed: TExpr) -> mono_ast::TExpr {
+    todo!() // TODO: ???
+}
+
 fn parse_compile(src: &str, dest: &Path) -> Result<(), Error> {
     let expr = sexpr::read(src)?;
     let mut ctx = TypeContext::new();
     let (mut env, builtins) = initial_env(&mut ctx);
     let texpr = type_expr(&expr, &mut env, &mut ctx)?;
-    env.debug_dump(&mut ctx);
+    env.debug_dump(&ctx);
     /*texpr.debug_show_types(&src, &mut ctx);
     println!("{:?}", env);
     println!("{:#?}", texpr);*/
-    compile(texpr, &builtins, &ctx, &env.definitions, dest);
+    let mono = to_mono(texpr);
+    compile(&mono, &builtins, &mut ctx, &env.definitions, dest);
     Ok(())
 }
 
@@ -65,9 +71,9 @@ fn type_expr(
             span,
         }),
         SExpr::Symbol(sym) => {
-            let (defn_id, general_ty) = env.get(sym, span)?;
-            let type_ = ctx.specialise(general_ty);
-            let expr = Box::new(Expr::Reference(defn_id));
+            let (defn, general_ty) = env.get(sym, span)?;
+            let (type_, specialise) = ctx.specialise(general_ty);
+            let expr = Reference { defn, specialise }.into();
             Ok(TExpr { type_, expr, span })
         }
         SExpr::Keyword(kw) => Err(error!("keyword {kw} found out of context").with_span(span)),
